@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seven Lenses, One Job Hunt — SCAMPER keepsake</title>
+<meta name="description" content="A keepsake of the SCAMPER brainstorm on the local job-hunt aggregator, 2026-08-18.">
+<style>
+:root{
+  --bg:#070b12;
+  --panel:#0c1320;
+  --panel2:#0f1827;
+  --line:#1b2939;
+  --line2:#263a50;
+  --ink:#ccd7e4;
+  --dim:#61738c;
+  --faint:#39495f;
+  --cyan:#5cc8ff;
+  --violet:#b18cff;
+  --green:#79e2a0;
+  --amber:#ffb454;
+  --teal:#4dd6c9;
+  --red:#ff5f5f;
+  --gray:#8b9bb0;
+  --mono:ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,"SF Mono",Menlo,monospace;
+  --serif:Georgia,"Times New Roman",serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--mono);
+  font-size:15px;
+  line-height:1.55;
+  overflow-x:hidden;
+}
+body::before{
+  content:"";
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(1100px 500px at 18% -6%, rgba(255,180,84,.05), transparent 60%),
+    radial-gradient(900px 480px at 88% 12%, rgba(92,200,255,.045), transparent 60%),
+    radial-gradient(1000px 620px at 50% 110%, rgba(121,226,160,.04), transparent 60%);
+}
+.noise{
+  position:fixed;inset:-50%;z-index:3;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/></filter><rect width='180' height='180' filter='url(%23n)' opacity='1'/></svg>");
+}
+.scanline{
+  position:fixed;left:0;right:0;height:120px;z-index:2;pointer-events:none;
+  background:linear-gradient(180deg,transparent,rgba(92,200,255,.045),rgba(92,200,255,.09),rgba(92,200,255,.045),transparent);
+  animation:scan 11s linear infinite;
+}
+@keyframes scan{0%{transform:translateY(-140px)}100%{transform:translateY(110vh)}}
+.page{
+  position:relative;z-index:1;
+  max-width:1120px;margin:0 auto;padding:0 28px 90px;
+}
+.masthead{padding-top:84px;display:grid;grid-template-columns:1fr 200px;gap:40px;align-items:center}
+.kicker{
+  font-size:11px;letter-spacing:.42em;text-transform:uppercase;color:var(--amber);
+  border:1px solid var(--line);border-radius:3px;padding:7px 12px;display:inline-block;background:var(--panel);
+}
+h1{
+  font-size:clamp(34px,6.4vw,66px);line-height:1.02;letter-spacing:.03em;text-transform:uppercase;
+  margin-top:26px;font-weight:700;
+}
+h1 .thin{color:var(--dim);font-weight:400}
+.lede{
+  font-family:var(--serif);font-style:italic;color:var(--dim);font-size:clamp(15px,1.8vw,19px);
+  margin-top:18px;max-width:56ch;line-height:1.5;
+}
+.radar{
+  width:190px;height:190px;border-radius:50%;position:relative;
+  border:1px solid var(--line2);
+  background:
+    radial-gradient(circle, rgba(255,180,84,.06) 0 26%, transparent 26.5%),
+    radial-gradient(circle, transparent 0 51%, rgba(255,180,84,.05) 51.5%, transparent 52%),
+    radial-gradient(circle, transparent 0 76%, rgba(255,180,84,.05) 76.5%, transparent 77%),
+    var(--panel);
+  box-shadow:0 0 44px rgba(255,180,84,.07), inset 0 0 30px rgba(0,0,0,.55);
+}
+.radar::before{
+  content:"";position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(from 0deg, rgba(255,180,84,.38), rgba(255,180,84,.06) 70deg, transparent 110deg);
+  animation:sweep 5s linear infinite;
+}
+@keyframes sweep{to{transform:rotate(360deg)}}
+.radar .cross-v,.radar .cross-h{position:absolute;background:var(--line2);opacity:.55}
+.radar .cross-v{left:50%;top:4%;bottom:4%;width:1px}
+.radar .cross-h{top:50%;left:4%;right:4%;height:1px}
+.blip{position:absolute;border-radius:50%;animation:blip 2.4s ease-in-out infinite}
+.blip.b1{width:7px;height:7px;background:var(--amber);top:26%;left:62%;box-shadow:0 0 10px var(--amber)}
+.blip.b2{width:5px;height:5px;background:var(--green);top:64%;left:34%;animation-delay:.7s;box-shadow:0 0 8px var(--green)}
+.blip.b3{width:6px;height:6px;background:var(--cyan);top:48%;left:56%;animation-delay:1.3s;box-shadow:0 0 9px var(--cyan)}
+@keyframes blip{0%,100%{opacity:.25;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}
+.radar .core{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:10px;height:10px;border-radius:50%;background:var(--amber);box-shadow:0 0 14px var(--amber);
+}
+.log{
+  margin-top:44px;border:1px solid var(--line);border-radius:6px;background:var(--panel);
+  padding:20px 24px;font-size:13.5px;overflow:hidden;
+}
+.log .row{display:grid;grid-template-columns:112px 1fr;gap:14px;padding:5px 0;border-bottom:1px dashed rgba(27,41,57,.65)}
+.log .row:last-child{border-bottom:0}
+.log .k{color:var(--faint);letter-spacing:.14em;font-size:11px;text-transform:uppercase;padding-top:3px}
+.log .v{color:var(--ink)}
+.log .v b{color:var(--amber);font-weight:600}
+.log .row.site .v b{color:var(--cyan)}
+.ticker{
+  margin-top:26px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  padding:14px 0;display:flex;align-items:center;gap:16px;overflow:hidden;
+}
+.ticker .tag{flex:0 0 auto;font-size:10px;letter-spacing:.3em;color:var(--bg);background:var(--amber);padding:5px 10px;border-radius:2px;font-weight:700}
+.ticker .msg{font-size:13.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:opacity .35s,transform .35s}
+.ticker .msg.out{opacity:0;transform:translateY(8px)}
+.ticker .msg b{color:var(--amber);font-weight:600}
+.section{margin-top:110px}
+.sec-head{display:flex;align-items:baseline;gap:20px;margin-bottom:38px}
+.sec-num{font-size:12px;letter-spacing:.34em;color:var(--amber)}
+.sec-title{font-size:clamp(22px,3.4vw,32px);text-transform:uppercase;letter-spacing:.05em}
+.sec-rule{flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent)}
+.sec-intro{font-family:var(--serif);font-style:italic;color:var(--dim);max-width:70ch;margin:-18px 0 34px;font-size:16px}
+.bars{display:flex;align-items:flex-end;gap:5px;height:34px;margin:0 0 6px}
+.bars i{flex:1;background:var(--green);opacity:.75;border-radius:1px;animation:beat 2.8s ease-in-out infinite}
+.bars i:nth-child(3n){background:var(--amber)}
+.bars i:nth-child(5n){background:var(--cyan)}
+.bars i:nth-child(2){height:34%}.bars i:nth-child(3){height:58%}.bars i:nth-child(4){height:26%}
+.bars i:nth-child(5){height:82%}.bars i:nth-child(6){height:44%}.bars i:nth-child(7){height:64%}
+.bars i:nth-child(8){height:30%}.bars i:nth-child(9){height:92%}.bars i:nth-child(10){height:50%}
+.bars i:nth-child(11){height:72%}.bars i:nth-child(12){height:38%}.bars i:nth-child(13){height:60%}
+.bars i:nth-child(14){height:24%}.bars i:nth-child(15){height:86%}.bars i:nth-child(16){height:46%}
+.bars i:nth-child(17){height:68%}.bars i:nth-child(18){height:32%}.bars i:nth-child(19){height:56%}
+.bars i:nth-child(20){height:78%}.bars i:nth-child(21){height:40%}.bars i:nth-child(22){height:62%}
+.bars i:nth-child(23){height:28%}.bars i:nth-child(24){height:90%}
+@keyframes beat{0%,100%{transform:scaleY(.86)}50%{transform:scaleY(1.06)}}
+.lens{
+  display:grid;grid-template-columns:250px 1fr;gap:0;
+  border:1px solid var(--line);border-radius:8px;background:var(--panel);
+  margin-bottom:34px;overflow:hidden;transition:border-color .35s, box-shadow .35s;
+}
+.lens:hover{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac), 0 18px 60px -30px var(--ac)}
+.lens-rail{
+  border-right:1px solid var(--line);padding:30px 26px;display:flex;flex-direction:column;gap:10px;
+  background:linear-gradient(180deg, color-mix(in srgb, var(--ac) 7%, transparent), transparent 55%);
+}
+.lens-badge{
+  width:58px;height:58px;border:2px solid var(--ac);border-radius:6px;display:flex;align-items:center;justify-content:center;
+  font-size:30px;font-weight:700;color:var(--ac);box-shadow:0 0 22px color-mix(in srgb, var(--ac) 25%, transparent);
+}
+.lens-count{font-size:10px;letter-spacing:.3em;color:var(--faint);margin-top:8px}
+.lens-name{font-size:19px;letter-spacing:.12em;color:var(--ac);text-transform:uppercase}
+.lens-verb{font-size:12px;color:var(--dim);font-style:italic;font-family:var(--serif);line-height:1.45}
+.lens-body{padding:30px 34px;display:flex;flex-direction:column;gap:20px}
+.subhead{font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--faint);margin-bottom:2px}
+.swap-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid var(--line);border-radius:6px;padding:12px 16px;background:var(--panel2)}
+.chip{font-size:12.5px;padding:7px 12px;border-radius:4px;border:1px solid;font-weight:600;letter-spacing:.04em}
+.chip.from{color:var(--faint);border-color:var(--line2);background:var(--panel)}
+.chip.to{color:var(--cyan);border-color:var(--cyan);background:rgba(92,200,255,.08)}
+.swap-arrow{color:var(--amber);font-size:18px;animation:swap 2.6s ease-in-out infinite;display:inline-block}
+@keyframes swap{0%,100%{transform:rotate(0)}50%{transform:rotate(180deg)}}
+.swap-note{font-size:12px;color:var(--dim);flex-basis:100%;padding-top:2px}
+.proxy-line{border:1px dashed var(--line2);border-radius:6px;padding:12px 16px;font-size:13px;color:var(--dim)}
+.proxy-line b{color:var(--amber)}
+.proxy-line .proxy-tag{display:inline-block;font-size:10px;letter-spacing:.22em;color:var(--bg);background:var(--amber);padding:3px 8px;border-radius:2px;margin-right:10px;font-weight:700}
+.urge-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.gauge-card{border:1px solid var(--line);border-radius:6px;padding:16px 18px;background:var(--panel2)}
+.gauge-card .g-title{font-size:10px;letter-spacing:.24em;color:var(--faint);text-transform:uppercase;margin-bottom:12px}
+.gauge-card .g-title b{color:var(--amber)}
+.meter{position:relative;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--green) 0 38%,var(--amber) 38% 68%,var(--red) 68% 100%);opacity:.85;margin:18px 0 10px}
+.meter .needle{position:absolute;top:-6px;left:78%;width:2px;height:24px;background:#fff;box-shadow:0 0 8px #fff,0 0 16px var(--red);transform:rotate(12deg);transform-origin:bottom}
+.meter-labels{display:flex;justify-content:space-between;font-size:10px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+.meter-cap{font-size:12px;color:var(--dim);margin-top:10px}
+.meter-cap b{color:var(--red)}
+.spark{display:flex;gap:14px;align-items:stretch;flex-wrap:wrap}
+.spark .sp{flex:1;min-width:200px}
+.spark svg{width:100%;height:64px;display:block;border-bottom:1px solid var(--line2)}
+.spark .sp-cap{font-size:11.5px;color:var(--dim);margin-top:8px}
+.spark .sp-cap b.churn{color:var(--red)}
+.spark .sp-cap b.growth{color:var(--green)}
+.fusion{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border:1px solid var(--line);border-radius:6px;padding:16px 18px;background:var(--panel2)}
+.fuse-chip{border:1px solid var(--violet);color:var(--violet);font-size:12.5px;padding:8px 14px;border-radius:4px;background:rgba(177,140,255,.07);font-weight:600}
+.fuse-op{color:var(--dim);font-size:16px}
+.fuse-out{border:1px solid var(--violet);color:#e6dcff;font-size:13px;padding:10px 16px;border-radius:6px;background:rgba(177,140,255,.16);font-weight:700;letter-spacing:.05em;box-shadow:0 0 26px rgba(177,140,255,.25)}
+.loop-fb{margin-top:2px;position:relative;border:1px dashed var(--line2);border-radius:6px;padding:14px 18px 10px}
+.loop-fb .row-lbl{font-size:10px;letter-spacing:.24em;color:var(--faint);text-transform:uppercase}
+.outcome-chips{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.outcome{font-size:12px;border:1px solid var(--line2);border-radius:20px;padding:5px 12px;color:var(--dim)}
+.outcome.resp{color:var(--green);border-color:var(--green)}
+.outcome.sil{color:var(--faint)}
+.fb-arc{display:block;margin:8px 0 2px}
+.fb-arc text{fill:var(--faint);font-size:9.5px;letter-spacing:.2em;font-family:var(--mono)}
+.user-star{font-size:12.5px;color:var(--amber)}
+.user-star b{font-weight:700}
+.pipeline{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap}
+.pipe-step{
+  flex:1;min-width:86px;text-align:center;border:1px solid var(--green);border-radius:5px;padding:10px 8px;
+  font-size:11px;color:var(--green);background:rgba(121,226,160,.06);letter-spacing:.05em;position:relative;
+}
+.pipe-step .n{display:block;font-size:9px;color:var(--faint);letter-spacing:.2em;margin-bottom:5px}
+.pipe-arrow{align-self:center;color:var(--green);font-size:14px;animation:flow 1.6s ease-in-out infinite}
+@keyframes flow{0%,100%{opacity:.35;transform:translateX(0)}50%{opacity:1;transform:translateX(3px)}}
+.stamp{display:inline-block;border:2px solid var(--green);color:var(--green);font-size:11px;font-weight:700;letter-spacing:.24em;padding:5px 12px;border-radius:3px;transform:rotate(-2deg);opacity:.9}
+.score-viz{border:1px solid var(--line);border-radius:6px;padding:16px 20px;background:var(--panel2)}
+.score-row{display:grid;grid-template-columns:230px 1fr 44px;gap:14px;align-items:center;padding:9px 0}
+.score-row .s-label{font-size:12.5px;color:var(--dim)}
+.score-row .s-bar{height:16px;border-radius:3px;background:#0a0f18;border:1px solid var(--line2);overflow:hidden;position:relative}
+.score-row .s-fill{height:100%;border-radius:2px}
+.score-row .s-val{font-size:11px;color:var(--faint);text-align:right;letter-spacing:.06em}
+.sf-wide{width:92%;background:linear-gradient(90deg,var(--green),#a8f0c2)}
+.sf-narrow{width:52%;background:linear-gradient(90deg,var(--faint),var(--gray))}
+.score-cap{font-size:11.5px;color:var(--dim);border-top:1px dashed var(--line);padding-top:10px}
+.score-cap b{color:var(--green)}
+.browser{border:1px solid var(--line2);border-radius:8px;background:#0a0f18;overflow:hidden;max-width:560px}
+.browser .b-head{display:flex;gap:6px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+.browser .dot{width:10px;height:10px;border-radius:50%}
+.browser .dot.d1{background:var(--red)}.browser .dot.d2{background:var(--amber)}.browser .dot.d3{background:var(--green)}
+.browser .b-url{margin-left:10px;font-size:11px;color:var(--faint)}
+.browser .b-body{padding:18px}
+.toast{
+  display:flex;align-items:center;gap:12px;border:1px solid var(--amber);border-radius:6px;padding:10px 14px;
+  background:rgba(255,180,84,.08);font-size:12.5px;animation:toast-in .7s ease-out;
+}
+@keyframes toast-in{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+.toast .t-icon{color:var(--amber);font-size:15px}
+.toast .t-txt b{color:var(--amber)}
+.job-card{margin-top:14px;border:1px solid var(--line);border-radius:6px;padding:16px 18px;background:var(--panel2)}
+.job-card .j-title{font-size:14.5px;font-weight:700;color:var(--ink)}
+.job-card .j-meta{font-size:11.5px;color:var(--faint);margin:5px 0 14px;letter-spacing:.04em}
+.btn{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.1em;padding:9px 16px;border-radius:4px;border:1px solid;margin-right:10px;cursor:default}
+.btn.link{color:var(--cyan);border-color:var(--cyan);background:rgba(92,200,255,.07)}
+.btn.apply{color:#06130b;background:var(--green);border-color:var(--green);box-shadow:0 0 18px rgba(121,226,160,.35)}
+.m-chips{display:flex;gap:10px;flex-wrap:wrap}
+.m-chip{font-size:11px;color:var(--dim);border:1px solid var(--line2);border-radius:20px;padding:5px 12px}
+.hub{display:grid;grid-template-columns:150px 1fr;gap:26px;align-items:center}
+.hub-core{
+  width:140px;height:140px;border-radius:50%;border:2px solid var(--teal);position:relative;
+  display:flex;align-items:center;justify-content:center;text-align:center;
+  font-size:11px;letter-spacing:.18em;color:var(--teal);text-transform:uppercase;
+  box-shadow:0 0 34px rgba(77,214,201,.25), inset 0 0 30px rgba(77,214,201,.08);
+  animation:core-pulse 3.4s ease-in-out infinite;
+}
+@keyframes core-pulse{0%,100%{box-shadow:0 0 24px rgba(77,214,201,.18),inset 0 0 26px rgba(77,214,201,.06)}50%{box-shadow:0 0 44px rgba(77,214,201,.35),inset 0 0 34px rgba(77,214,201,.1)}}
+.hub-core::before,.hub-core::after{content:"";position:absolute;border-radius:50%;border:1px dashed rgba(77,214,201,.35)}
+.hub-core::before{inset:-14px;animation:spin 14s linear infinite}
+.hub-core::after{inset:14px;animation:spin 20s linear infinite reverse}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hub-dests{display:flex;flex-direction:column;gap:12px}
+.hub-dest{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:6px;padding:12px 16px;background:var(--panel2);position:relative}
+.hub-dest .h-line{width:34px;height:1px;background:var(--teal);position:relative;flex:0 0 auto}
+.hub-dest .h-line::after{content:"";position:absolute;right:-1px;top:-3px;border:4px solid transparent;border-left-color:var(--teal)}
+.hub-dest .h-name{font-size:13px;color:var(--teal);font-weight:700;letter-spacing:.06em}
+.hub-dest .h-note{font-size:12px;color:var(--dim)}
+.hub-dest.first{border-color:rgba(77,214,201,.5)}
+.hub-dest.first .h-name{color:var(--green)}
+.cut-list{display:flex;flex-direction:column;gap:8px}
+.cut-item{display:flex;align-items:center;gap:12px;font-size:13.5px;color:var(--faint);text-decoration:line-through;text-decoration-color:var(--red);text-decoration-thickness:2px}
+.cut-item .x{color:var(--red);font-size:12px}
+.keep-chip{display:inline-block;border:1px solid var(--green);color:var(--green);background:rgba(121,226,160,.08);font-size:13px;font-weight:600;padding:10px 18px;border-radius:6px;letter-spacing:.04em}
+.stop-wrap{display:flex;align-items:center;gap:34px;flex-wrap:wrap}
+.octagon{
+  width:150px;height:150px;flex:0 0 auto;
+  clip-path:polygon(29.3% 0,70.7% 0,100% 29.3%,100% 70.7%,70.7% 100%,29.3% 100%,0 70.7%,0 29.3%);
+  background:radial-gradient(circle at 38% 32%, #ff8a8a, var(--red) 55%, #a02020 100%);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;color:#1c0606;
+  box-shadow:0 0 46px rgba(255,95,95,.4);animation:stop-pulse 2.6s ease-in-out infinite;
+}
+@keyframes stop-pulse{0%,100%{box-shadow:0 0 30px rgba(255,95,95,.3)}50%{box-shadow:0 0 60px rgba(255,95,95,.55)}}
+.octagon .o1{font-size:30px;font-weight:700;letter-spacing:.1em}
+.octagon .o2{font-size:11px;letter-spacing:.42em;margin-top:2px;font-weight:700}
+.rest-rule{font-size:15px;color:var(--ink);max-width:38ch}
+.rest-rule .big{font-size:34px;font-weight:700;color:var(--red);line-height:1.1;display:block}
+.rest-rule .small{color:var(--dim);font-size:13px;margin-top:10px}
+.rest-tag{display:inline-block;font-size:10.5px;letter-spacing:.24em;color:var(--red);border:1px solid var(--red);border-radius:20px;padding:5px 12px;margin-top:14px}
+.decide-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:36px;align-items:start}
+.matrix-wrap{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:22px 24px}
+.matrix-wrap h4{font-size:11px;letter-spacing:.28em;color:var(--faint);text-transform:uppercase;margin-bottom:14px}
+.matrix svg{width:100%;height:auto;display:block}
+.mx-label{font-size:11px;letter-spacing:.16em;fill:var(--faint);font-family:var(--mono)}
+.mx-dot{transition:transform .2s}
+.mx-dot:hover{transform:scale(1.6)}
+.mx-star{animation:star-glow 2.2s ease-in-out infinite}
+@keyframes star-glow{0%,100%{opacity:.85}50%{opacity:1;filter:drop-shadow(0 0 8px var(--amber))}}
+.verdicts{display:flex;flex-direction:column;gap:10px}
+.verdict{display:grid;grid-template-columns:34px 1fr auto auto;gap:12px;align-items:center;border:1px solid var(--line);border-radius:6px;padding:11px 16px;background:var(--panel);font-size:13px}
+.verdict .vn{color:var(--faint);font-size:11px;letter-spacing:.12em}
+.verdict .vt{color:var(--ink)}
+.verdict .v-chip{font-size:10px;letter-spacing:.14em;padding:4px 9px;border-radius:3px;border:1px solid var(--line2);color:var(--dim);text-transform:uppercase}
+.verdict .v-chip.imp{color:var(--amber);border-color:rgba(255,180,84,.4)}
+.verdict .v-chip.eff{color:var(--cyan);border-color:rgba(92,200,255,.35)}
+.verdict.win{border-color:var(--amber);box-shadow:0 0 24px rgba(255,180,84,.12)}
+.verdict.win .vt{color:var(--amber);font-weight:700}
+.verdict.win .star{color:var(--amber)}
+.lock-block{margin-top:40px;border:1px solid var(--line);border-radius:8px;background:linear-gradient(180deg,var(--panel2),var(--panel));padding:30px 34px}
+.lock-block h4{font-size:11px;letter-spacing:.28em;color:var(--amber);text-transform:uppercase;margin-bottom:20px}
+.build-order{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.build-step{flex:1;min-width:250px;border:1px solid var(--line2);border-radius:8px;padding:18px 20px;background:#0a0f18}
+.build-step .bs-n{font-size:10px;letter-spacing:.3em;color:var(--faint)}
+.build-step .bs-t{font-size:15px;font-weight:700;color:var(--ink);margin-top:8px;line-height:1.4}
+.build-step.one{border-color:var(--amber)}
+.build-step.one .bs-n{color:var(--amber)}
+.build-step.one .bs-t{color:var(--amber)}
+.build-step.two .bs-t{color:var(--dim)}
+.build-arrow{color:var(--amber);font-size:26px;animation:swap 2.6s ease-in-out infinite}
+.build-principle{margin-top:22px;font-size:12.5px;color:var(--dim);border-left:2px solid var(--amber);padding-left:16px}
+.build-principle b{color:var(--amber)}
+.circuit-shell{border:1px solid var(--line);border-radius:10px;background:radial-gradient(600px 300px at 50% 40%, rgba(92,200,255,.05), transparent 65%), var(--panel);padding:26px 26px 30px;position:relative;overflow:hidden}
+.circuit{position:relative;max-width:980px;margin:0 auto;aspect-ratio:980/500}
+.circuit svg{position:absolute;inset:0;width:100%;height:100%}
+.node{
+  position:absolute;width:252px;transform:translate(-50%,-50%);
+  border:1px solid var(--nc);border-radius:8px;background:rgba(10,15,24,.92);
+  padding:14px 16px;box-shadow:0 0 30px color-mix(in srgb, var(--nc) 14%, transparent), 0 10px 30px rgba(0,0,0,.4);
+  transition:transform .25s;
+}
+.node:hover{transform:translate(-50%,-50%) scale(1.04)}
+.node .n-num{font-size:10px;letter-spacing:.28em;color:var(--nc)}
+.node .n-title{font-size:13.5px;font-weight:700;letter-spacing:.06em;color:var(--nc);margin:6px 0 7px;text-transform:uppercase}
+.node .n-txt{font-size:12px;color:var(--dim);line-height:1.5}
+.node .n-txt b{color:var(--ink)}
+.node.n1{--nc:var(--cyan);top:17%;left:50%}
+.node.n2{--nc:var(--amber);top:50%;left:66.8%}
+.node.n3{--nc:var(--violet);top:83%;left:50%}
+.node.n4{--nc:var(--green);top:50%;left:33.2%}
+.hub-center{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:118px;height:118px;border-radius:50%;border:1px dashed var(--line2);
+  display:flex;align-items:center;justify-content:center;text-align:center;
+  animation:spin 30s linear infinite;
+}
+.hub-center .inner{animation:spin 30s linear infinite reverse;font-size:10.5px;letter-spacing:.26em;color:var(--faint);line-height:1.9}
+.hub-center .inner b{display:block;font-size:13px;color:var(--amber);letter-spacing:.12em}
+.synth-coda{margin-top:26px;text-align:center;font-family:var(--serif);font-style:italic;color:var(--dim);font-size:16px}
+.synth-coda b{color:var(--amber);font-style:normal;font-weight:600}
+.tape-block{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:24px 28px;max-height:420px;overflow-y:auto}
+.tape-block pre{font-family:var(--mono);font-size:12.5px;line-height:1.75;color:var(--dim);white-space:pre-wrap;word-break:break-word}
+.tape-block pre .tag-i{color:var(--cyan)}
+.tape-block pre .tag-s{color:var(--green)}
+.tape-block pre .tag-d{color:var(--amber)}
+.tape-block pre .tag-r{color:var(--violet)}
+.tape-block .tape-cap{font-size:10px;letter-spacing:.3em;color:var(--faint);text-transform:uppercase;margin-bottom:14px}
+footer{margin-top:90px;border-top:1px solid var(--line);padding-top:26px;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;font-size:11.5px;color:var(--faint);letter-spacing:.14em;text-transform:uppercase}
+footer .f-r{color:var(--dim)}
+footer .f-r b{color:var(--amber)}
+::selection{background:rgba(255,180,84,.25);color:#fff}
+@media (max-width:920px){
+  .masthead{grid-template-columns:1fr;padding-top:60px}
+  .radar{display:none}
+  .lens{grid-template-columns:1fr}
+  .lens-rail{border-right:0;border-bottom:1px solid var(--line);flex-direction:row;align-items:center;gap:16px;padding:18px 24px}
+  .lens-rail .lens-count,.lens-rail .lens-verb{display:none}
+  .urge-grid,.decide-grid{grid-template-columns:1fr}
+  .hub{grid-template-columns:1fr;justify-items:center}
+  .node{position:static;transform:none;width:auto;margin-bottom:12px}
+  .node:hover{transform:none}
+  .circuit{aspect-ratio:auto;display:flex;flex-direction:column}
+  .circuit svg{display:none}
+  .hub-center{display:none}
+  .score-row{grid-template-columns:1fr}
+  .score-row .s-val{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<div class="noise" aria-hidden="true"></div>
+<div class="scanline" aria-hidden="true"></div>
+
+<div class="page">
+
+  <header class="masthead">
+    <div>
+      <span class="kicker">Keepsake &middot; Brainstorm &middot; 2026-08-18 &middot; 21:11</span>
+      <h1>Seven Lenses,<br><span class="thin">One Job Hunt</span></h1>
+      <p class="lede">The night a scraper became a signal room &mdash; a SCAMPER session on the local job-hunt aggregator, from first hunch to locked direction.</p>
+    </div>
+    <div class="radar" aria-hidden="true">
+      <div class="cross-v"></div><div class="cross-h"></div>
+      <div class="blip b1"></div><div class="blip b2"></div><div class="blip b3"></div>
+      <div class="core"></div>
+    </div>
+  </header>
+
+  <div class="log">
+    <div class="row"><span class="k">Session</span><span class="v">local job-hunt aggregator</span></div>
+    <div class="row"><span class="k">Goal</span><span class="v">land a full-stack web dev role faster &mdash; aggregate opportunities from an <b>extensible set of job sites</b>, filtered by keywords</span></div>
+    <div class="row site"><span class="k">Stack</span><span class="v">Next.js + Django &middot; Fiverr-grade scraping muscle &middot; <b>ouedkniss</b> among the watched boards</span></div>
+    <div class="row"><span class="k">Technique</span><span class="v">SCAMPER &mdash; <b>7/7 lenses</b> run, every one of them</span></div>
+    <div class="row"><span class="k">Status</span><span class="v"><b>complete</b> &mdash; direction locked: simple extensible engine + application loop first, scoring and urgency after</span></div>
+  </div>
+
+  <div class="ticker" role="marquee" aria-label="Session highlights">
+    <span class="tag">TAPE</span>
+    <span class="msg" id="tmsg"></span>
+  </div>
+
+  <section class="section" id="lenses">
+    <div class="sec-head">
+      <span class="sec-num">01 / 04</span>
+      <h2 class="sec-title">The Lens Gallery</h2>
+      <span class="sec-rule"></span>
+    </div>
+    <p class="sec-intro">Seven lenses, seven trades &mdash; each one swapped, fused, borrowed, rebuilt, redirected, cut, or reversed the plan. One pass over the idea, no lens wasted.</p>
+
+    <article class="lens" style="--ac:var(--cyan)">
+      <div class="lens-rail">
+        <div class="lens-badge">S</div>
+        <div class="lens-count">Lens 01 / 07</div>
+        <h3 class="lens-name">Substitute</h3>
+        <p class="lens-verb">swap the raw post for the signals around it</p>
+      </div>
+      <div class="lens-body">
+        <div class="swap-row">
+          <span class="chip from">RAW POSTS</span>
+          <span class="swap-arrow">&#8646;</span>
+          <span class="chip to">ACTIVITY SIGNALS</span>
+          <span class="swap-note">views &middot; app count &middot; post age &middot; recruiter activity</span>
+        </div>
+        <div class="swap-row">
+          <span class="chip from">KEYWORD MATCH</span>
+          <span class="swap-arrow">&#8646;</span>
+          <span class="chip to">PROBLEM / INDUSTRY MATCH</span>
+          <span class="swap-note">match the problem the recruiter is actually solving</span>
+        </div>
+        <div class="swap-row">
+          <span class="chip from">RAW HTML PARSING</span>
+          <span class="swap-arrow">&#8646;</span>
+          <span class="chip to">SCRAPY + PLAYWRIGHT + LLM PARSING</span>
+          <span class="swap-note">the automation stack</span>
+        </div>
+        <div class="proxy-line">
+          <span class="proxy-tag">Proxy</span>
+          recruiter reputation &amp; engagement intensity = the top signal &mdash; honestly hard to measure from outside, so count what is measurable: <b>how many websites the same recruiter posts the same job on</b> (cross-platform footprint).
+        </div>
+        <div class="urge-grid">
+          <div class="gauge-card">
+            <div class="g-title">Urgency meter &middot; <b>cross-platform footprint</b></div>
+            <div class="meter"><div class="needle"></div></div>
+            <div class="meter-labels"><span>1 site</span><span>quiet</span><span>4 sites</span></div>
+            <div class="meter-cap">Same post on 4 of 4 boards = <b>recruiter in dire need</b> of filling the role.</div>
+          </div>
+          <div class="gauge-card">
+            <div class="g-title">Repost history &middot; churn vs growth</div>
+            <div class="spark">
+              <div class="sp">
+                <svg viewBox="0 0 280 64" aria-hidden="true">
+                  <polyline points="0,62 40,12 80,62 120,12 160,62 200,12 240,62 280,12" fill="none" stroke="#ff5f5f" stroke-width="2" opacity=".85"/>
+                  <line x1="0" y1="62" x2="280" y2="62" stroke="#263a50" stroke-width="1"/>
+                </svg>
+                <div class="sp-cap"><b class="churn">CHURN</b> &mdash; same text, deleted, reappears</div>
+              </div>
+              <div class="sp">
+                <svg viewBox="0 0 280 64" aria-hidden="true">
+                  <rect x="10" y="44" width="26" height="18" fill="#79e2a0" opacity=".6"/>
+                  <rect x="50" y="34" width="26" height="28" fill="#79e2a0" opacity=".7"/>
+                  <rect x="90" y="24" width="26" height="38" fill="#79e2a0" opacity=".8"/>
+                  <rect x="130" y="30" width="26" height="32" fill="#79e2a0" opacity=".7"/>
+                  <rect x="170" y="16" width="26" height="46" fill="#79e2a0" opacity=".9"/>
+                  <rect x="210" y="8" width="26" height="54" fill="#79e2a0"/>
+                  <rect x="250" y="20" width="26" height="42" fill="#79e2a0" opacity=".85"/>
+                  <line x1="0" y1="62" x2="280" y2="62" stroke="#263a50" stroke-width="1"/>
+                </svg>
+                <div class="sp-cap"><b class="growth">GROWTH</b> &mdash; cluster of new related roles</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="proxy-line">Persistent scraping gives history &mdash; both patterns readable even on <b>sparse platforms</b>.</div>
+      </div>
+    </article>
+
+    <article class="lens" style="--ac:var(--violet)">
+      <div class="lens-rail">
+        <div class="lens-badge">C</div>
+        <div class="lens-count">Lens 02 / 07</div>
+        <h3 class="lens-name">Combine</h3>
+        <p class="lens-verb">fuse scraper muscle with dev skills</p>
+      </div>
+      <div class="lens-body">
+        <div class="fusion">
+          <span class="fuse-chip">SCRAPER MUSCLE</span>
+          <span class="fuse-op">+</span>
+          <span class="fuse-chip">DEV SKILLS</span>
+          <span class="fuse-op">=</span>
+          <span class="fuse-out">SELF-TUNING FILTER</span>
+        </div>
+        <div class="loop-fb">
+          <div class="row-lbl">The feedback loop it runs</div>
+          <div class="outcome-chips">
+            <span class="outcome resp">response</span>
+            <span class="outcome resp">interview</span>
+            <span class="outcome sil">silence</span>
+          </div>
+          <svg class="fb-arc" viewBox="0 0 520 64" aria-hidden="true">
+            <path d="M 488 32 H 32" fill="none" stroke="#263a50" stroke-width="1.5" stroke-dasharray="5 6" stroke-dashoffset="0">
+              <animate attributeName="stroke-dashoffset" from="0" to="-22" dur="1.8s" repeatCount="indefinite"/>
+            </path>
+            <path d="M 32 32 l 10 -5 m -10 5 l 10 5" stroke="#b18cff" stroke-width="1.5" fill="none"/>
+            <text x="30" y="18" text-anchor="middle">backend tracks application outcomes</text>
+            <text x="30" y="58" text-anchor="middle">learns what responds to the profile &rarr; steers the next fetch</text>
+          </svg>
+        </div>
+        <div class="user-star">The user's own verdict, on the record: <b>&#9733; "very good idea to implement"</b></div>
+      </div>
+    </article>
+
+    <article class="lens" style="--ac:var(--green)">
+      <div class="lens-rail">
+        <div class="lens-badge">A</div>
+        <div class="lens-count">Lens 03 / 07</div>
+        <h3 class="lens-name">Adapt</h3>
+        <p class="lens-verb">borrow the toolkit you already built</p>
+      </div>
+      <div class="lens-body">
+        <div class="pipeline">
+          <div class="pipe-step"><span class="n">01</span>rawListing</div><span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-step"><span class="n">02</span>extraction</div><span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-step"><span class="n">03</span>cleaning</div><span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-step"><span class="n">04</span>normalization</div><span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-step"><span class="n">05</span>deduplication</div><span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-step"><span class="n">06</span>validation</div><span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-step"><span class="n">07</span>analytics dashboard</div>
+        </div>
+        <div>
+          <span class="stamp">REUSED</span>
+          <span style="font-size:12.5px;color:var(--dim);margin-left:12px">multi-phase pipeline from the Algerian real-estate platform (ouedkniss scraper, Fiverr era) &middot; the same muscle powers the dz-leads finder</span>
+        </div>
+        <div class="proxy-line">Recalibration, on the record: keep it <b>practical</b> &mdash; easy access to opportunities + insight about <b>new vs old postings</b>, not deep pipeline theory.</div>
+        <div class="score-viz">
+          <div class="subhead">Interest signals &middot; scoring weights, decided</div>
+          <div class="score-row">
+            <span class="s-label">Problem-domain overlap</span>
+            <div class="s-bar"><div class="s-fill sf-wide"></div></div>
+            <span class="s-val">FAVORED</span>
+          </div>
+          <div class="score-row">
+            <span class="s-label">Post sanity (realistic expectations)</span>
+            <div class="s-bar"><div class="s-fill sf-wide"></div></div>
+            <span class="s-val">FAVORED</span>
+          </div>
+          <div class="score-row">
+            <span class="s-label">Tech-stack match</span>
+            <div class="s-bar"><div class="s-fill sf-narrow"></div></div>
+            <span class="s-val">LESS</span>
+          </div>
+          <div class="score-cap">Weights: <b>problem-domain overlap + post sanity</b> favored over tech-stack overlap. Plus the quieter one &mdash; a problem type already solved in previous work.</div>
+        </div>
+      </div>
+    </article>
+
+    <article class="lens" style="--ac:var(--amber)">
+      <div class="lens-rail">
+        <div class="lens-badge">M</div>
+        <div class="lens-count">Lens 04 / 07</div>
+        <h3 class="lens-name">Modify</h3>
+        <p class="lens-verb">make it live, local, one click from applied</p>
+      </div>
+      <div class="lens-body">
+        <div class="browser">
+          <div class="b-head">
+            <span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+            <span class="b-url">localhost:3000 &mdash; the local web app (Next.js + Django)</span>
+          </div>
+          <div class="b-body">
+            <div class="toast">
+              <span class="t-icon">&#128276;</span>
+              <span class="t-txt"><b>NEW MATCH</b> &mdash; fresh posting, scored, worth a look. One click opens it.</span>
+            </div>
+            <div class="job-card">
+              <div class="j-title">Full-stack dev &mdash; problem-domain hit</div>
+              <div class="j-meta">platform &middot; posted today &middot; score high</div>
+              <span class="btn link">EXTERNAL LINK</span>
+              <span class="btn apply">&#10003; MARK AS APPLIED</span>
+            </div>
+          </div>
+        </div>
+        <div class="m-chips">
+          <span class="m-chip">real-time &middot; websockets / polling from the Django scraper loop</span>
+          <span class="m-chip">paged full-list view</span>
+          <span class="m-chip">browser notification, one-click actionable</span>
+          <span class="m-chip">local job detail page &mdash; mark-as-applied sits right next to the external link</span>
+        </div>
+      </div>
+    </article>
+
+    <article class="lens" style="--ac:var(--teal)">
+      <div class="lens-rail">
+        <div class="lens-badge">P</div>
+        <div class="lens-count">Lens 05 / 07</div>
+        <h3 class="lens-name">Put to Other Use</h3>
+        <p class="lens-verb">one engine, other clients waiting</p>
+      </div>
+      <div class="lens-body">
+        <div class="hub">
+          <div class="hub-core">THE ENGINE<br><span style="font-size:9px;letter-spacing:.14em">one scraper, many watchers</span></div>
+          <div class="hub-dests">
+            <div class="hub-dest first">
+              <span class="h-line"></span>
+              <div><div class="h-name">JOB BOARDS &mdash; first client</div><div class="h-note">the reason the engine exists</div></div>
+            </div>
+            <div class="hub-dest">
+              <span class="h-line"></span>
+              <div><div class="h-name">SOCIAL-MEDIA TRAFFIC</div><div class="h-note">same engine, repurposed to monitor activity</div></div>
+            </div>
+            <div class="hub-dest">
+              <span class="h-line"></span>
+              <div><div class="h-name">REGIONAL VIRAL PRODUCTS</div><div class="h-note">trending categories in a region &mdash; not tracking individual products</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <article class="lens" style="--ac:var(--gray)">
+      <div class="lens-rail">
+        <div class="lens-badge">E</div>
+        <div class="lens-count">Lens 06 / 07</div>
+        <h3 class="lens-name">Eliminate</h3>
+        <p class="lens-verb">ship lean, cut the rest</p>
+      </div>
+      <div class="lens-body">
+        <div class="cut-list">
+          <div class="cut-item"><span class="x">&#10007;</span> dashboards</div>
+          <div class="cut-item"><span class="x">&#10007;</span> tracking</div>
+          <div class="cut-item"><span class="x">&#10007;</span> feedback loop</div>
+          <div class="cut-item"><span class="x">&#10007;</span> LLM parsing</div>
+          <div class="cut-item"><span class="x">&#10007;</span> notifications</div>
+        </div>
+        <div>
+          <div class="subhead">What survives the cut &mdash; version one, exactly</div>
+          <span class="keep-chip">JOB LISTINGS + EASY ADD-NEW-SITE EXTENSIBILITY</span>
+        </div>
+      </div>
+    </article>
+
+    <article class="lens" style="--ac:var(--red)">
+      <div class="lens-rail">
+        <div class="lens-badge">R</div>
+        <div class="lens-count">Lens 07 / 07</div>
+        <h3 class="lens-name">Reverse</h3>
+        <p class="lens-verb">the tool that tells you to stop</p>
+      </div>
+      <div class="lens-body">
+        <div class="stop-wrap">
+          <div class="octagon" aria-hidden="true">
+            <div class="o1">STOP</div>
+            <div class="o2">REST</div>
+          </div>
+          <div>
+            <div class="rest-rule">
+              <span class="big">10 great matches applied this week</span>
+              <span class="small">&rarr; the tool says: rest. A sanity / anti-burnout mode built into the machine that hunts for you.</span>
+            </div>
+            <div class="rest-tag">anti-burnout mode</div>
+          </div>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <section class="section" id="decisions">
+    <div class="sec-head">
+      <span class="sec-num">02 / 04</span>
+      <h2 class="sec-title">Decide &amp; Lock</h2>
+      <span class="sec-rule"></span>
+    </div>
+    <p class="sec-intro">Every idea priced: impact against effort. One verdict glowed amber &mdash; and the build order locked itself around it.</p>
+
+    <div class="decide-grid">
+      <div class="matrix-wrap">
+        <h4>Impact &times; effort &mdash; the verdict board</h4>
+        <svg class="matrix" viewBox="0 0 520 470" aria-label="Impact versus effort matrix of six ideas">
+          <rect x="0" y="0" width="520" height="470" fill="none"/>
+          <line x1="60" y1="40" x2="60" y2="420" stroke="#263a50" stroke-width="1"/>
+          <line x1="60" y1="420" x2="500" y2="420" stroke="#263a50" stroke-width="1"/>
+          <line x1="60" y1="230" x2="500" y2="230" stroke="#1b2939" stroke-width="1" stroke-dasharray="4 6"/>
+          <line x1="280" y1="40" x2="280" y2="420" stroke="#1b2939" stroke-width="1" stroke-dasharray="4 6"/>
+          <text x="30" y="220" class="mx-label" transform="rotate(-90 30 220)" text-anchor="middle">IMPACT</text>
+          <text x="280" y="450" class="mx-label" text-anchor="middle">EFFORT</text>
+          <text x="170" y="56" class="mx-label" fill="#ffb454">HIGH / LOW</text>
+          <text x="395" y="56" class="mx-label" fill="#ffb454">HIGH / HIGH</text>
+          <text x="170" y="404" class="mx-label" fill="#39495f">LOW / LOW</text>
+          <text x="395" y="404" class="mx-label" fill="#39495f">LOW / HIGH</text>
+          <circle cx="126" cy="97" r="7" fill="#ffb454" class="mx-dot mx-star"/>
+          <text x="126" y="84" class="mx-label" text-anchor="middle" fill="#ffb454">5 &#9733; build first</text>
+          <circle cx="280" cy="116" r="6" fill="#79e2a0" class="mx-dot"/>
+          <text x="280" y="103" class="mx-label" text-anchor="middle" fill="#79e2a0">3</text>
+          <circle cx="280" cy="141" r="6" fill="#5cc8ff" class="mx-dot"/>
+          <text x="280" y="128" class="mx-label" text-anchor="middle" fill="#5cc8ff">4</text>
+          <circle cx="280" cy="306" r="6" fill="#8b9bb0" class="mx-dot"/>
+          <text x="280" y="293" class="mx-label" text-anchor="middle" fill="#8b9bb0">2</text>
+          <circle cx="412" cy="306" r="6" fill="#8b9bb0" class="mx-dot"/>
+          <text x="412" y="293" class="mx-label" text-anchor="middle" fill="#8b9bb0">1</text>
+          <circle cx="434" cy="325" r="6" fill="#8b9bb0" class="mx-dot"/>
+          <text x="434" y="312" class="mx-label" text-anchor="middle" fill="#8b9bb0">6</text>
+        </svg>
+      </div>
+      <div>
+        <div class="subhead" style="margin-bottom:12px">The six, priced</div>
+        <div class="verdicts">
+          <div class="verdict"><span class="vn">01</span><span class="vt">core engine</span><span class="v-chip imp">impact LOW</span><span class="v-chip eff">effort HIGH</span></div>
+          <div class="verdict"><span class="vn">02</span><span class="vt">listing UX</span><span class="v-chip imp">impact LOW</span><span class="v-chip eff">effort MED</span></div>
+          <div class="verdict"><span class="vn">03</span><span class="vt">interest scoring</span><span class="v-chip imp">impact HIGH</span><span class="v-chip eff">effort MED</span></div>
+          <div class="verdict"><span class="vn">04</span><span class="vt">urgency signals</span><span class="v-chip imp">impact HIGH</span><span class="v-chip eff">effort MED</span></div>
+          <div class="verdict win"><span class="vn">05</span><span class="vt"><span class="star">&#9733;</span> application loop</span><span class="v-chip imp">impact HIGH</span><span class="v-chip eff">effort LOW</span></div>
+          <div class="verdict"><span class="vn">06</span><span class="vt">other uses</span><span class="v-chip imp">impact LOW</span><span class="v-chip eff">effort HIGH</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="lock-block">
+      <h4>Locked direction &mdash; the build order</h4>
+      <div class="build-order">
+        <div class="build-step one">
+          <div class="bs-n">STEP 1</div>
+          <div class="bs-t">simple extensible engine skeleton<br>+ application loop</div>
+        </div>
+        <span class="build-arrow">&rarr;</span>
+        <div class="build-step two">
+          <div class="bs-n">STEP 2</div>
+          <div class="bs-t">interest scoring + urgency signals</div>
+        </div>
+      </div>
+      <div class="build-principle">Principle, engraved: <b>the engine starts simple &mdash; designed to be extended.</b></div>
+    </div>
+  </section>
+
+  <section class="section" id="synthesis">
+    <div class="sec-head">
+      <span class="sec-num">03 / 04</span>
+      <h2 class="sec-title">The Synthesis</h2>
+      <span class="sec-rule"></span>
+    </div>
+    <p class="sec-intro">Four connections closed the loop. The session's ending was also its beginning: everything the seven lenses produced, wired into one circuit.</p>
+
+    <div class="circuit-shell">
+      <div class="circuit">
+        <svg viewBox="0 0 980 500" aria-hidden="true">
+          <defs>
+            <marker id="arr-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#5cc8ff"/>
+            </marker>
+            <marker id="arr-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#ffb454"/>
+            </marker>
+            <marker id="arr-v" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#b18cff"/>
+            </marker>
+            <marker id="arr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#79e2a0"/>
+            </marker>
+          </defs>
+          <path d="M 490 85 Q 490 250 655 250" fill="none" stroke="#5cc8ff" stroke-width="1.6" stroke-dasharray="7 9" marker-end="url(#arr-c)">
+            <animate attributeName="stroke-dashoffset" from="0" to="-32" dur="2.6s" repeatCount="indefinite"/>
+          </path>
+          <path d="M 655 250 Q 490 250 490 415" fill="none" stroke="#ffb454" stroke-width="1.6" stroke-dasharray="7 9" marker-end="url(#arr-a)">
+            <animate attributeName="stroke-dashoffset" from="0" to="-32" dur="2.6s" repeatCount="indefinite"/>
+          </path>
+          <path d="M 490 415 Q 490 250 325 250" fill="none" stroke="#b18cff" stroke-width="1.6" stroke-dasharray="7 9" marker-end="url(#arr-v)">
+            <animate attributeName="stroke-dashoffset" from="0" to="-32" dur="2.6s" repeatCount="indefinite"/>
+          </path>
+          <path d="M 325 250 Q 490 250 490 85" fill="none" stroke="#79e2a0" stroke-width="1.6" stroke-dasharray="7 9" marker-end="url(#arr-g)">
+            <animate attributeName="stroke-dashoffset" from="0" to="-32" dur="2.6s" repeatCount="indefinite"/>
+          </path>
+        </svg>
+
+        <div class="node n1">
+          <div class="n-num">CONNECTION 01</div>
+          <div class="n-title">Urgency = free queries</div>
+          <div class="n-txt">urgency signals are <b>queries over persistent engine data</b> &mdash; free once the engine exists</div>
+        </div>
+        <div class="node n2">
+          <div class="n-num">CONNECTION 02</div>
+          <div class="n-title">Scoring = the product</div>
+          <div class="n-txt"><b>judgment no job board offers</b> &mdash; problem-domain, sanity, urgency, weighted</div>
+        </div>
+        <div class="node n3">
+          <div class="n-num">CONNECTION 03</div>
+          <div class="n-title">One feedback mechanism</div>
+          <div class="n-txt">the <b>self-tuning filter</b> and the <b>stop-signal</b> are the same loop &mdash; learn, and know when to rest</div>
+        </div>
+        <div class="node n4">
+          <div class="n-num">CONNECTION 04</div>
+          <div class="n-title">Engine is generic</div>
+          <div class="n-txt">put-to-other-use proved it &mdash; <b>jobs are the first client</b>, not the only one</div>
+        </div>
+
+        <div class="hub-center" aria-hidden="true">
+          <div class="inner"><b>ONE LOOP</b>four connections<br>one circuit</div>
+        </div>
+      </div>
+      <div class="synth-coda">Decide-and-lock, spoken plainly: <b>build the loop first. Everything else is a query on it.</b></div>
+    </div>
+  </section>
+
+  <section class="section" id="tape">
+    <div class="sec-head">
+      <span class="sec-num">04 / 04</span>
+      <h2 class="sec-title">Source Tape</h2>
+      <span class="sec-rule"></span>
+    </div>
+    <p class="sec-intro">The memlog, verbatim &mdash; the session's sole source of truth, inked while it happened.</p>
+    <div class="tape-block">
+      <div class="tape-cap">.memlog.md &middot; topic: local job-hunt aggregator &middot; mode: facilitator &middot; status: complete &middot; updated: 2026-08-18T21:11</div>
+      <pre><span class="tag-i">(idea)</span> Substitute: aggregate activity signals around a job post (views, app count, post age, recruiter activity) instead of raw posts
+<span class="tag-i">(idea)</span> Substitute: match on industry/problem the recruiter is solving instead of keywords
+<span class="tag-i">(idea)</span> Substitute: automation stack = scrapy + playwright + LLM-based parsing instead of raw HTML parsing
+<span class="tag-i">(idea)</span> Substitute: recruiter reputation + recruiter engagement intensity on a post as the top signal (acknowledged hard to measure from outside)
+<span class="tag-i">(idea)</span> Proxy: how many websites the same recruiter posts the same job on (cross-platform footprint)
+<span class="tag-s">(insight)</span> Cross-posted job = recruiter in dire need of filling the role (urgency signal)
+<span class="tag-s">(insight)</span> Persistent scraping gives history: repost-pattern (same title/text reappears after delete) = churn signal; cluster of new related roles = growth signal — works on sparse platforms
+<span class="tag-i">(idea)</span> Combine: scraper muscle + dev skills fusion = self-tuning filter — backend tracks application outcomes (response/interview/silence), learns which postings respond to profile, steers next fetch toward what works (user: very good idea to implement)
+<span class="tag-i">(idea)</span> Adapt: entire scraping toolkit is reusable — can source any data the app needs without user input; existing medium projects: dz leads finder + algerian real estate analytics platform
+<span class="tag-i">(idea)</span> Adapt: reuse multi-phase pipeline from real estate platform (ouedkniss scraper, Fiverr-era) — rawListing > extraction > cleaning > normalization > deduplication > validation > analytics dashboard
+<span class="tag-r">(direction)</span> User recalibrated: keep questions practical — goal is easy access to opportunities + insight about new and old postings, not deep pipeline theory
+<span class="tag-i">(idea)</span> Interest signals: (1) requirements/tech stack matches user's stack, (2) company's problem type already solved in user's previous works, (3) post well-written with realistic expectations (no absurd stacked requirements)
+<span class="tag-d">(decision)</span> Scoring weights: problem-domain overlap and post sanity favored over tech-stack overlap
+<span class="tag-i">(idea)</span> Modify: real-time (websockets/polling from Django scraper loop), paged full-list view, local web app (Next.js + Django), browser notification one-click actionable -> opens local job detail page with Mark-as-applied button next to external link
+<span class="tag-i">(idea)</span> Put-to-other-use: same engine repurposed to monitor social media traffic/activity
+<span class="tag-i">(idea)</span> Put-to-other-use: detect products going viral in a region (trending product categories, not tracking individual products)
+<span class="tag-d">(decision)</span> Eliminate: first version = job listings + easy add-new-site extensibility only; cut dashboards, tracking, feedback loop, LLM parsing, notifications
+<span class="tag-i">(idea)</span> Reverse: the tool tells the user when to STOP (e.g., 10 great matches applied this week -> rest), sanity/anti-burnout mode
+<span class="tag-d">(decision)</span> Impact-Effort verdicts: 1 core engine (impact low / effort high) 2 listing UX (low/med) 3 interest scoring (high/med) 4 urgency signals (high/med) 5 application loop (high/LOW) 6 other uses (low/high)
+<span class="tag-d">(decision)</span> Locked direction: build order = simple extensible engine skeleton + application loop first, then interest scoring + urgency signals; principle: engine starts simple, designed to be extended
+<span class="tag-s">(insight)</span> Synthesis: (1) urgency signals = queries over persistent engine data, free once engine exists; (2) scoring = the product (judgment no job board offers); (3) self-tuning filter and stop-signal are one feedback mechanism; (4) put-to-other-use proved engine is generic - jobs are first client</pre>
+    </div>
+  </section>
+
+  <footer>
+    <div class="f-l">SCAMPER &middot; 7/7 lenses &middot; facilitator mode</div>
+    <div class="f-r">2026-08-18 &middot; 21:11 &middot; <b>decide-and-lock: engine skeleton + application loop first</b></div>
+  </footer>
+
+</div>
+
+<script>
+(function(){
+  var items = [
+    'lens 01 \u00b7 SUBSTITUTE \u2014 activity signals instead of raw posts',
+    'lens 02 \u00b7 COMBINE \u2014 scraper muscle + dev skills = self-tuning filter \u2605 user verdict: very good idea',
+    'lens 03 \u00b7 ADAPT \u2014 pipeline reused from the real-estate platform (Fiverr era)',
+    'lens 04 \u00b7 MODIFY \u2014 one-click notification \u2192 mark-as-applied',
+    'lens 05 \u00b7 PUT-TO-OTHER-USE \u2014 the engine watches socials, finds viral products',
+    'lens 06 \u00b7 ELIMINATE \u2014 cut dashboards, tracking, LLM parsing, notifications',
+    'lens 07 \u00b7 REVERSE \u2014 10 great matches applied \u2192 rest',
+    'cross-posted job = recruiter in dire need',
+    'weights: problem-domain + post sanity favored over tech-stack',
+    'verdict: application loop = high impact / low effort \u2014 build first',
+    'locked: engine skeleton + application loop first, scoring + urgency after',
+    'synthesis: urgency = free queries \u00b7 scoring = the product \u00b7 filter + stop = one loop \u00b7 jobs first client'
+  ];
+  var el = document.getElementById('tmsg');
+  var i = 0;
+  el.innerHTML = '<b>' + items[0].split(' \u2014 ')[0] + '</b>' + ' \u2014 ' + items[0].split(' \u2014 ').slice(1).join(' \u2014 ');
+  setInterval(function(){
+    el.classList.add('out');
+    setTimeout(function(){
+      i = (i + 1) % items.length;
+      var parts = items[i].split(' \u2014 ');
+      el.innerHTML = '<b>' + parts[0] + '</b>' + ' \u2014 ' + parts.slice(1).join(' \u2014 ');
+      el.classList.remove('out');
+    }, 380);
+  }, 3600);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+# Tracked: _bmad-output/ (planning artifacts) + backend/ + frontend/ (project code).
+# Everything else (tooling, agents, config) is excluded via the whitelist below.
+/*
+!.gitignore
+!_bmad-output/
+!backend/
+!frontend/
+
+# --- Python / Django (backend) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.db
+*.db-journal
+*.sqlite3
+*.sqlite
+
+# --- Node / Next.js (frontend) ---
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- Secrets / env ---
+.env
+.env.*
+!.env.example
+
+# --- OS / editor ---
+Thumbs.db
+.DS_Store
