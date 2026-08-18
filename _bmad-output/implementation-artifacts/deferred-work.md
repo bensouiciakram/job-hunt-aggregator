@@ -23,3 +23,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-source-registry.md`
   summary: SSRF hardening — host allow-list for test-fetch URLs — if the tool ever binds beyond localhost.
   evidence: Review finding — test-fetch fetches arbitrary url_pattern hosts; acceptable for a local single-user tool (NFR-1) but unsafe if exposed.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-collection-pipeline.md`
+  summary: seen_sources lost-update window — check-then-append on `listing.seen_sources` has no row lock, so two writers appending concurrently could drop one source key.
+  evidence: Post-review finding (Story 1.3 patch) — SQLite lacks row locks; the single collector process makes this moot today; revisit if a second writer ever appends to the same Listing.
