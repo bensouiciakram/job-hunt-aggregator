@@ -15,10 +15,12 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
 
 from collector.ports import AdapterNotFound
 from collector.registry import get_adapter
 from collector.test_fetch import TestFetchError, run_test_fetch
+from judge.scoring import score as score_listing
 from listings.models import FetchLog, Listing, Source
 from listings.services import apply_to_listing
 
@@ -157,6 +159,7 @@ def _listing_payload(listing):
         ),
         'status': listing.status,
         'keywords': listing.keywords,
+        'interest_score': score_listing(listing, settings.INTEREST_PROFILE),
     }
 
 

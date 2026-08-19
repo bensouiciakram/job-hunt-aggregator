@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'api',
     'collector',
+    'judge',
     'listings',
 ]
 
@@ -136,3 +137,22 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
 ]
+
+# Interest profile (Story 3.1, FR-6): hand-maintained terms the judge scores
+# against. domains + project_types weigh MORE than tech_stack (PRD §4.4).
+INTEREST_PROFILE = {
+    'tech_stack': [
+        'python', 'django', 'fastapi', 'flask', 'react', 'nextjs', 'next.js',
+        'typescript', 'javascript', 'nodejs', 'node.js', 'postgresql', 'postgres',
+        'mysql', 'sqlite', 'redis', 'docker', 'kubernetes', 'aws', 'scrapy',
+        'playwright', 'selenium', 'pandas', 'numpy',
+    ],
+    'domains': [
+        'web scraping', 'webscraping', 'data engineering',
+        'api', 'backend', 'fullstack', 'full-stack', 'automation',
+    ],
+    'project_types': [
+        'freelance', 'freelancing', 'remote', 'algeria', 'alger', 'ouedkniss',
+        'contract', 'part-time', 'internship', 'stage',
+    ],
+}

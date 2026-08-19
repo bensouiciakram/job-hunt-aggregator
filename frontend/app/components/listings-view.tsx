@@ -13,6 +13,7 @@ export type ListingItem = {
   source: { name: string; adapter_key: string } | null;
   status: string;
   keywords: string[];
+  interest_score: number;
 };
 
 type Props = {
@@ -61,6 +62,7 @@ export default function ListingsView({ initialItems, bucket, keyword, page }: Pr
           <li key={item.id} className="py-5">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="break-words text-lg font-medium">{item.title}</h2>
+              <ScoreChip score={item.interest_score} />
               {item.source && (
                 <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                   {item.source.name}
@@ -95,6 +97,24 @@ export default function ListingsView({ initialItems, bucket, keyword, page }: Pr
         );
       })}
     </ul>
+  );
+}
+
+function ScoreChip({ score }: { score: number }) {
+  if (typeof score !== "number") return null;
+  const tone =
+    score >= 70
+      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200"
+      : score < 40
+        ? "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200"
+        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300";
+  return (
+    <span
+      title="Interest score"
+      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${tone}`}
+    >
+      {score}
+    </span>
   );
 }
 

@@ -16,6 +16,7 @@ from django.utils import timezone
 from collector.adapters.google_jobs import GoogleJobsAdapter
 from collector.pipeline import compute_fingerprint
 from collector.registry import clear, get_adapter, register
+from judge.scoring import score, score_text
 from listings.models import FetchLog, Listing, Source
 
 
@@ -464,7 +465,8 @@ class ListingsApiTests(ApiTestCase):
 
         self.assertEqual(
             set(item.keys()),
-            {'id', 'title', 'company', 'url', 'published_at', 'source', 'status', 'keywords'},
+            {'id', 'title', 'company', 'url', 'published_at', 'source', 'status',
+             'keywords', 'interest_score'},
         )
         self.assertEqual(item['source'], {'name': 'Demo', 'adapter_key': 'stub-api-adapter'})
         self.assertEqual(item['status'], 'new')
@@ -888,3 +890,151 @@ class BucketApiTests(TestCase):
         response = self.client.get(reverse('listings'), {'bucket': 'weird'})
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json(), {'ok': False, 'error': 'invalid bucket'})
+
+
+class ScoringTests(TestCase):
+    """Story 3.1 pure interest scoring: weighting, sanity, purity, payload."""
+
+    PROFILE = {
+        'tech_stack': ['python', 'django', 'react', 'nodejs'],
+        'domains': ['web scraping', 'api', 'backend'],
+        'project_types': ['remote', 'freelance'],
+    }
+
+    def test_domain_outscores_stack_alone(self):
+        domain_only = score_text(
+            'Web Scraping API Developer',
+            ['python', 'remote'],
+            self.PROFILE,
+        )
+        stack_only = score_text(
+            'Python React Developer',
+            ['python'],
+            self.PROFILE,
+        )
+        self.assertGreater(domain_only, stack_only)
+
+    def test_domain_matches_weigh_more_than_stack_matches(self):
+        self.assertEqual(score_text('Web Scraping Engineer', [], self.PROFILE), 58)
+        self.assertEqual(score_text('Python Engineer', [], self.PROFILE), 54)
+
+    def test_absurd_stack_penalized(self):
+        title = 'Full-stack NodeJS Python Golang Java Engineer'
+        profile = {**self.PROFILE, 'tech_stack': self.PROFILE['tech_stack'] + ['golang', 'java']}
+        self.assertEqual(score_text(title, [], profile), 26)
+
+    def test_empty_title_penalized(self):
+        self.assertEqual(score_text('', [], self.PROFILE), 35)
+        self.assertEqual(score_text('  ', [], self.PROFILE), 35)
+        self.assertEqual(score_text('Dev', [], self.PROFILE), 35)
+
+    def test_no_match_neutral_baseline(self):
+        self.assertEqual(score_text('Cashier Wanted', [], self.PROFILE), 50)
+
+    def test_clamp_high_and_low(self):
+        many = {'tech_stack': ['alpha', 'bravo', 'charlie'],
+                'domains': ['xray', 'yacht', 'zebra', 'lima', 'mike', 'november', 'oscar'],
+                'project_types': []}
+        self.assertEqual(
+            score_text('xray yacht zebra lima mike november oscar', [], many), 100
+        )
+        self.assertEqual(score_text('', [], many), 35)
+
+    def test_api_does_not_match_inside_scraping(self):
+        self.assertEqual(score_text('Scraping Engineer', [], self.PROFILE), 50)
+        self.assertEqual(score_text('API Engineer', [], self.PROFILE), 58)
+
+    def test_multiword_term_requires_adjacency(self):
+        self.assertEqual(score_text('Web Content Scraping', [], self.PROFILE), 50)
+        self.assertEqual(score_text('Web Scraping Engineer', [], self.PROFILE), 58)
+
+    def test_nextjs_style_term_matches_punctuated_title(self):
+        profile = {'tech_stack': ['next.js'], 'domains': [], 'project_types': []}
+        self.assertEqual(score_text('Next.js Developer', [], profile), 54)
+
+    def test_spelling_variants_collapse_to_one_match(self):
+        profile = {'domains': ['full-stack', 'fullstack'], 'tech_stack': [], 'project_types': []}
+        self.assertEqual(score_text('Full-stack Fullstack Engineer', [], profile), 58)
+
+    def test_bad_keywords_and_profile_shapes_do_not_crash(self):
+        self.assertEqual(score_text('Python Dev', 'not-a-list', self.PROFILE), 54)
+        self.assertEqual(score_text('Python Dev', [42, None], self.PROFILE), 54)
+        self.assertEqual(score_text('Python Dev', ['python'], {'tech_stack': 'nope'}), 50)
+        self.assertEqual(score_text('Python Dev', ['python'], {'tech_stack': [7]}), 50)
+        self.assertEqual(score_text('Python Dev', ['python'], None), 50)
+
+    def test_punctuation_only_title_penalized(self):
+        self.assertEqual(score_text('....', [], self.PROFILE), 35)
+
+    def test_term_in_both_lists_counts_once(self):
+        profile = {'tech_stack': ['api'], 'domains': ['api'], 'project_types': []}
+        self.assertEqual(score_text('API Engineer', [], profile), 58)
+
+    def test_real_profile_pins_concrete_scores(self):
+        from django.conf import settings
+
+        real = settings.INTEREST_PROFILE
+        self.assertEqual(score_text('Python Django React Node.js Developer', [], real), 26)
+        self.assertEqual(score_text('Web Scraping API Developer', [], real), 66)
+
+    def test_real_profile_is_structurally_sound(self):
+        from django.conf import settings
+
+        real = settings.INTEREST_PROFILE
+        for key in ('tech_stack', 'domains', 'project_types'):
+            self.assertIn(key, real)
+            self.assertIsInstance(real[key], list)
+            self.assertTrue(real[key])
+            self.assertTrue(all(isinstance(t, str) and t.strip() for t in real[key]))
+        self.assertEqual(len(real['tech_stack']), len(set(real['tech_stack'])))
+        self.assertEqual(len(real['domains']), len(set(real['domains'])))
+        self.assertEqual(len(real['project_types']), len(set(real['project_types'])))
+
+    def test_keyword_duplicate_collapsed(self):
+        one = score_text('Python Backend', ['python', 'backend'], self.PROFILE)
+        two = score_text('Python Backend', ['backend'], self.PROFILE)
+        self.assertEqual(one, two)
+
+    def test_purity_no_mutation(self):
+        listing = Listing.objects.create(
+            title='Python Developer',
+            company='Acme',
+            url='https://example.com/job',
+            dedup_fingerprint='fp-1',
+            status='new',
+            seen_sources=['ouedkniss'],
+            raw_snapshot={'a': 1},
+        )
+        before = (
+            listing.title,
+            listing.company,
+            listing.status,
+            listing.dedup_fingerprint,
+            listing.seen_sources,
+            listing.raw_snapshot,
+        )
+        score(listing, self.PROFILE)
+        listing.refresh_from_db()
+        after = (
+            listing.title,
+            listing.company,
+            listing.status,
+            listing.dedup_fingerprint,
+            listing.seen_sources,
+            listing.raw_snapshot,
+        )
+        self.assertEqual(before, after)
+
+    def test_payload_includes_interest_score(self):
+        from django.conf import settings
+
+        listing = Listing.objects.create(
+            title='Web Scraping API Developer',
+            company='Acme',
+            url='https://example.com/job',
+            dedup_fingerprint='fp-2',
+        )
+        item = self.client.get(reverse('listings')).json()['data']['items'][0]
+        self.assertEqual(item['interest_score'], score(listing, settings.INTEREST_PROFILE))
+        self.assertIsInstance(item['interest_score'], int)
+        self.assertTrue(0 <= item['interest_score'] <= 100)
