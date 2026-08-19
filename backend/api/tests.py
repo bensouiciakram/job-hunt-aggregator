@@ -5,14 +5,18 @@ stub adapter and a stubbed fetcher — no network in these tests.
 """
 
 import json
+from datetime import timedelta
 from unittest.mock import Mock, patch
 
+from django.core.serializers.json import DjangoJSONEncoder
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from collector.adapters.google_jobs import GoogleJobsAdapter
+from collector.pipeline import compute_fingerprint
 from collector.registry import clear, get_adapter, register
-from listings.models import Source
+from listings.models import FetchLog, Listing, Source
 
 
 class StubApiAdapter:
@@ -395,3 +399,230 @@ class TestFetchApiTests(ApiTestCase):
         response = self.client.put(reverse('sources'))
         self.assertEqual(response.status_code, 405)
         self.assertEqual(response.json(), {'ok': False, 'error': 'method not allowed'})
+
+
+class ListingsApiTests(ApiTestCase):
+    """Story 1.8 GET /api/listings/ tests: AD-9 sort/paging/last_sweep_at + AD-10 envelope."""
+
+    def _listing(self, **overrides):
+        defaults = {
+            'title': 'Job',
+            'company': 'Acme',
+            'url': 'https://example.com/job',
+            'published_at': timezone.now(),
+        }
+        defaults.update(overrides)
+        defaults['dedup_fingerprint'] = compute_fingerprint(
+            defaults['title'], defaults['company'], defaults['url']
+        )
+        return Listing.objects.create(**defaults)
+
+    def test_list_default_sorted_and_envelope(self):
+        base = timezone.now()
+        for i in range(25):
+            self._listing(
+                title=f'Job {i}',
+                url=f'https://example.com/{i}',
+                published_at=base - timedelta(days=i),
+            )
+        tie_a = self._listing(title='Tie A', published_at=base)
+        tie_b = self._listing(title='Tie B', published_at=base)
+
+        response = self.client.get(reverse('listings'))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        self.assertIsNone(payload['error'])
+        self.assertEqual(set(payload.keys()), {'ok', 'data', 'error'})
+        data = payload['data']
+        self.assertEqual(
+            set(data.keys()), {'items', 'page', 'has_next', 'total', 'last_sweep_at'}
+        )
+        self.assertEqual(data['page'], 1)
+        self.assertEqual(len(data['items']), 25)
+        self.assertTrue(data['has_next'])
+        self.assertEqual(data['total'], 27)
+        titles = [item['title'] for item in data['items']]
+        self.assertEqual(titles[:3], ['Tie B', 'Tie A', 'Job 0'])
+        self.assertEqual(titles[-1], 'Job 22')
+
+    def test_item_shape_excludes_raw_snapshot(self):
+        source = Source.objects.create(
+            name='Demo', adapter_key='stub-api-adapter', config=VALID_CONFIG
+        )
+        self._listing(
+            title='Python Dev',
+            company='Acme',
+            url='https://example.com/1',
+            keywords=['python'],
+            source=source,
+            raw_snapshot={'secret': 'not-for-the-list'},
+        )
+
+        item = self.client.get(reverse('listings')).json()['data']['items'][0]
+
+        self.assertEqual(
+            set(item.keys()),
+            {'id', 'title', 'company', 'url', 'published_at', 'source', 'status', 'keywords'},
+        )
+        self.assertEqual(item['source'], {'name': 'Demo', 'adapter_key': 'stub-api-adapter'})
+        self.assertEqual(item['status'], 'new')
+        self.assertEqual(item['keywords'], ['python'])
+        self.assertNotIn('raw_snapshot', item)
+
+    def test_null_source_rendered_null(self):
+        self._listing(source=None)
+        item = self.client.get(reverse('listings')).json()['data']['items'][0]
+        self.assertIsNone(item['source'])
+
+    def test_page_2_returns_items_26_50(self):
+        base = timezone.now()
+        for i in range(50):
+            self._listing(
+                title=f'Job {i:02d}',
+                published_at=base - timedelta(days=i),
+            )
+
+        data = self.client.get(reverse('listings'), {'page': 2}).json()['data']
+
+        self.assertEqual(len(data['items']), 25)
+        self.assertFalse(data['has_next'])
+        self.assertEqual(data['total'], 50)
+        titles = [item['title'] for item in data['items']]
+        self.assertEqual(titles[0], 'Job 25')
+        self.assertEqual(titles[-1], 'Job 49')
+
+    def test_page_out_of_range_clamped_to_last_page(self):
+        self._listing(title='Only')
+
+        response = self.client.get(reverse('listings'), {'page': 999})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        self.assertIsNone(payload['error'])
+        self.assertEqual(payload['data']['page'], 1)
+        self.assertEqual([item['title'] for item in payload['data']['items']], ['Only'])
+        self.assertFalse(payload['data']['has_next'])
+        self.assertEqual(payload['data']['total'], 1)
+
+    def test_page_huge_clamped(self):
+        response = self.client.get(reverse('listings'), {'page': 10**18})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        self.assertIsNone(payload['error'])
+        self.assertEqual(payload['data']['items'], [])
+        self.assertEqual(payload['data']['page'], 1)
+        self.assertEqual(payload['data']['total'], 0)
+
+    def test_invalid_page_non_int_returns_envelope_error(self):
+        response = self.client.get(reverse('listings'), {'page': 'abc'})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json(), {'ok': False, 'error': 'invalid page'})
+
+    def test_invalid_page_zero_returns_envelope_error(self):
+        response = self.client.get(reverse('listings'), {'page': 0})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json(), {'ok': False, 'error': 'invalid page'})
+
+    def test_keyword_matches_title_or_company_icontains(self):
+        self._listing(title='Python Developer', company='Acme')
+        self._listing(title='Backend Dev', company='PythonWorks')
+        self._listing(title='Dev', company='Acme')
+
+        data = self.client.get(reverse('listings'), {'keyword': 'pytHon'}).json()['data']
+
+        titles = {item['title'] for item in data['items']}
+        self.assertEqual(titles, {'Python Developer', 'Backend Dev'})
+        self.assertEqual(data['total'], 2)
+
+    def test_keyword_no_match_returns_empty_ok(self):
+        self._listing(title='Dev', company='Acme')
+        data = self.client.get(reverse('listings'), {'keyword': 'zigzag'}).json()['data']
+        self.assertEqual(data['items'], [])
+        self.assertEqual(data['total'], 0)
+        self.assertFalse(data['has_next'])
+
+    def test_null_published_at_sorts_last(self):
+        self._listing(title='Newest', published_at=timezone.now())
+        self._listing(title='Older', published_at=timezone.now() - timedelta(days=1))
+        null_row = self._listing(title='No Date', published_at=None)
+
+        items = self.client.get(reverse('listings')).json()['data']['items']
+
+        self.assertEqual([item['title'] for item in items], ['Newest', 'Older', 'No Date'])
+        self.assertIsNone(items[-1]['published_at'])
+
+    def test_last_sweep_at_from_latest_ok_pass_row(self):
+        FetchLog.objects.create(stage='fail', ok=True)
+        FetchLog.objects.create(stage='pass', ok=False)
+        old_stamp = timezone.now() - timedelta(hours=2)
+        old = FetchLog.objects.create(stage='pass', ok=True)
+        FetchLog.objects.filter(pk=old.pk).update(created_at=old_stamp)
+        latest_stamp = timezone.now()
+        latest = FetchLog.objects.create(stage='pass', ok=True)
+        FetchLog.objects.filter(pk=latest.pk).update(created_at=latest_stamp)
+
+        data = self.client.get(reverse('listings')).json()['data']
+
+        self.assertEqual(data['last_sweep_at'], json.loads(DjangoJSONEncoder().encode(latest_stamp)))
+
+    def test_last_sweep_at_null_when_no_ok_pass(self):
+        FetchLog.objects.create(stage='pass', ok=False)
+        FetchLog.objects.create(stage='fail', ok=True)
+
+        data = self.client.get(reverse('listings')).json()['data']
+
+        self.assertIsNone(data['last_sweep_at'])
+
+    def test_wrong_method_returns_405_envelope(self):
+        response = self.client.post(reverse('listings'))
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json(), {'ok': False, 'error': 'method not allowed'})
+
+
+class CorsTests(TestCase):
+    """Story 1.8 CORS: allowed dev origins echoed, disallowed origins get nothing."""
+
+    def test_allowed_origin_localhost_echoed(self):
+        response = self.client.get(
+            reverse('listings'), HTTP_ORIGIN='http://localhost:3000'
+        )
+        self.assertEqual(
+            response.headers.get('Access-Control-Allow-Origin'), 'http://localhost:3000'
+        )
+
+    def test_allowed_origin_127_echoed(self):
+        response = self.client.get(
+            reverse('listings'), HTTP_ORIGIN='http://127.0.0.1:3000'
+        )
+        self.assertEqual(
+            response.headers.get('Access-Control-Allow-Origin'), 'http://127.0.0.1:3000'
+        )
+
+    def test_disallowed_origin_gets_no_header(self):
+        response = self.client.get(reverse('listings'), HTTP_ORIGIN='http://evil.example')
+        self.assertNotIn('Access-Control-Allow-Origin', response.headers)
+
+    def test_preflight_allowed_origin(self):
+        response = self.client.options(
+            reverse('listings'),
+            HTTP_ORIGIN='http://localhost:3000',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='GET',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers.get('Access-Control-Allow-Origin'), 'http://localhost:3000'
+        )
+
+    def test_preflight_disallowed_origin_gets_no_header(self):
+        response = self.client.options(
+            reverse('listings'),
+            HTTP_ORIGIN='https://evil.example',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='GET',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('Access-Control-Allow-Origin', response.headers)

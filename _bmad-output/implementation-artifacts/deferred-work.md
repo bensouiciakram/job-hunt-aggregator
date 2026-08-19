@@ -15,9 +15,6 @@
   summary: Harden Listing.status at the DB layer (CheckConstraint) when Epic 2 introduces the apply service.
   evidence: Review round 2 — choices are form-layer only; ORM can insert 'bogus' status today.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-source-registry.md`
-  summary: Add CORS headers when the Next.js frontend (Story 1.8) calls this API cross-origin (localhost:3000 → localhost:8000); csrf_exempt is already granted.
-  evidence: Review finding — the API is same-origin-only today; the Story 1.8 frontend posts from a different localhost origin.
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-source-registry.md`
   summary: SSRF hardening — host allow-list for test-fetch URLs — if the tool ever binds beyond localhost.
   evidence: Review finding — test-fetch fetches arbitrary url_pattern hosts; acceptable for a local single-user tool (NFR-1) but unsafe if exposed.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-collection-pipeline.md`

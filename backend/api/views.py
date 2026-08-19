@@ -10,13 +10,14 @@ origin-less localhost context; admin stays CSRF-protected.
 import json
 
 from django.db import IntegrityError
+from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from collector.ports import AdapterNotFound
 from collector.registry import get_adapter
 from collector.test_fetch import TestFetchError, run_test_fetch
-from listings.models import Source
+from listings.models import FetchLog, Listing, Source
 
 
 def _ok(data, status=200):
@@ -131,3 +132,83 @@ def test_fetch(request, pk):
     except TestFetchError as exc:
         return _err(str(exc))
     return _ok(result)
+
+
+PER_PAGE = 25
+
+
+def _listing_payload(listing):
+    return {
+        'id': listing.id,
+        'title': listing.title,
+        'company': listing.company,
+        'url': listing.url,
+        'published_at': listing.published_at,
+        'source': (
+            {
+                'name': listing.source.name,
+                'adapter_key': listing.source.adapter_key,
+            }
+            if listing.source
+            else None
+        ),
+        'status': listing.status,
+        'keywords': listing.keywords,
+    }
+
+
+def _last_sweep_at():
+    """created_at of the latest ok=True 'pass' FetchLog, else None (AD-9)."""
+    row = (
+        FetchLog.objects.filter(stage='pass', ok=True)
+        .order_by('-created_at', '-id')
+        .first()
+    )
+    return row.created_at if row else None
+
+
+@csrf_exempt
+def listings(request):
+    """GET /api/listings/ — AD-9 paged list, AD-10 envelope.
+
+    Sort: published_at DESC, id DESC (SQLite sorts NULLs last in DESC —
+    pinned by test). per_page fixed at PER_PAGE. `page` out of range is
+    an empty ok result, not an error; invalid `page` (non-int, <1) is a
+    422-style envelope error.
+    """
+    if request.method != 'GET':
+        return _err('method not allowed', status=405)
+
+    raw_page = request.GET.get('page', '1')
+    try:
+        page = int(raw_page)
+    except (TypeError, ValueError):
+        return _err('invalid page', status=422)
+    if page < 1:
+        return _err('invalid page', status=422)
+
+    queryset = Listing.objects.select_related('source').order_by('-published_at', '-id')
+    keyword = (request.GET.get('keyword') or '').strip()
+    if keyword:
+        queryset = queryset.filter(
+            Q(title__icontains=keyword) | Q(company__icontains=keyword)
+        )
+
+    total = queryset.count()
+    # Clamp after total is known, before the slice: an out-of-range page
+    # (e.g. page=10**18) must not overflow SQLite's 64-bit OFFSET — it lands
+    # on the last page instead of raising.
+    page = min(page, max(1, (total + PER_PAGE - 1) // PER_PAGE))
+    start = (page - 1) * PER_PAGE
+    items = queryset[start : start + PER_PAGE]
+
+    data = {
+        'items': [_listing_payload(l) for l in items],
+        'page': page,
+        'has_next': start + PER_PAGE < total,
+        'total': total,
+        'last_sweep_at': _last_sweep_at(),
+    }
+    return JsonResponse(
+        {'ok': True, 'data': data, 'error': None}, status=200
+    )

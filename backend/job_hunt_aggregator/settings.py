@@ -37,12 +37,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'corsheaders',
     'api',
     'collector',
     'listings',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -127,3 +129,10 @@ STATIC_URL = 'static/'
 # interval job. The startup pass backfills when the gap since the last
 # successful pass is >= 2x this value (>= 60 minutes at the default 30).
 COLLECTOR_INTERVAL_MINUTES = 30
+
+# CORS (Story 1.8): the Next.js dev server at localhost:3000 is the only
+# allowed origin — no wildcard, no credentials (no auth).
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+]

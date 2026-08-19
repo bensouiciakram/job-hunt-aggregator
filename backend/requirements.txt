@@ -4,3 +4,4 @@ requests>=2.31
 parsel>=1.11
 python-jobspy>=1.1.82,<2
 playwright>=1.62,<2
+django-cors-headers==4.9.0
