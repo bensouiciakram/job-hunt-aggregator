@@ -6,9 +6,6 @@
   summary: Enforce dedup_fingerprint immutability and seen_sources append-only semantics at the model/repository layer (save guard / helper API).
   evidence: Review finding — invariants are currently documented in comments only; story 1.3 (collection pipeline) owns the upsert semantics and should enforce them.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-backend-foundation.md`
-  summary: Pin backend dependencies reproducibly (pyproject.toml + uv.lock) instead of `uv pip install "Django>=6.1,<7"`.
-  evidence: Review finding — no lockfile exists yet; worth doing once the backend dependency set stabilizes (after adapters land).
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-backend-foundation.md`
   summary: Define and enforce the dedup_fingerprint format (non-empty, sha256 hex, algorithm/version headroom) with the pipeline that generates it.
   evidence: Review round 2 — max_length=64 fits sha256 hex exactly with no headroom; empty-string fingerprints would collide on the unique index; story 1.3 owns fingerprint generation.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-backend-foundation.md`
@@ -26,3 +23,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-collection-pipeline.md`
   summary: seen_sources lost-update window — check-then-append on `listing.seen_sources` has no row lock, so two writers appending concurrently could drop one source key.
   evidence: Post-review finding (Story 1.3 patch) — SQLite lacks row locks; the single collector process makes this moot today; revisit if a second writer ever appends to the same Listing.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-collector-worker.md`
+  summary: Wake-from-sleep backfill bookkeeping — the misfire_grace_time fix stops coalesced runs from being silently dropped, but writing a backfill FetchLog row on resume requires spec renegotiation.
+  evidence: Post-review finding (Story 1.4 patch) — grace time applied; revisit.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-collector-worker.md`
+  summary: Stale-cutoff anchored to pre-poll `now` — the stale count uses the `now` captured before the poll; drift only on long passes.
+  evidence: Post-review finding (Story 1.4 patch) — nit; revisit.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-collector-worker.md`
+  summary: Source-deleted-mid-poll dangling FK — Listing.source and FetchLog.source use SET_NULL; snapshot semantics; revisit if FK enforcement is ever enabled.
+  evidence: Post-review finding (Story 1.4 patch) — revisit if FK enforcement ever enabled.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-collector-worker.md`
+  summary: Boot-time DB crash fails loud by design — AD-6 isolation is per-source only; startup pass errors are not swallowed.
+  evidence: Post-review finding (Story 1.4 patch) — revisit.

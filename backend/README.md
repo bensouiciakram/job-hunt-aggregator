@@ -11,7 +11,7 @@ Django 6.1 project under `backend/`, Python 3.13, SQLite (WAL + busy_timeout).
 ```powershell
 uv python install 3.13        # one-time, user-local
 uv venv --python 3.13         # creates .venv
-uv pip install "Django>=6.1,<7"
+uv pip install -r requirements.txt
 ```
 
 ## Run
@@ -30,6 +30,26 @@ Or activate the venv and use `python` directly:
 python manage.py migrate
 python manage.py runserver
 ```
+
+## Running
+
+Two processes (AD-2): the dev server and the collector worker run
+independently:
+
+```powershell
+uv run python manage.py runserver       # dev server on http://127.0.0.1:8000/
+uv run python manage.py run_collector   # collector worker (separate process)
+```
+
+- Run **exactly one** collector worker — there is no double-run guard or
+  locking (personal single-user tool); a second worker would poll Sources
+  redundantly.
+- Cadence (AD-7): the worker polls every registered Source every
+  `COLLECTOR_INTERVAL_MINUTES` (default 30). On startup it catches up after
+  downtime — when this is the first pass or the gap since the last
+  successful pass is >= 2x the interval — and logs a `backfill` FetchLog
+  carrying the count of stale listings (`published_at` older than 24h).
+- Ctrl+C stops the worker cleanly (graceful scheduler shutdown, exit 0).
 
 ## Conventions (AD-2 / AD-4)
 

@@ -8,11 +8,15 @@ FINGERPRINT_STABLE — with stub adapters; no network in these tests.
 
 import json
 import types
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 import requests
+from apscheduler.schedulers.blocking import BlockingScheduler
+from django.conf import settings
+from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
+from django.utils import timezone
 
 from .collect import collect_source
 from .pipeline import (
@@ -30,6 +34,14 @@ from .ports import AdapterNotFound
 from .registry import clear, get_adapter, register
 from .repository import ListingRepository
 from .test_fetch import MAX_SAMPLE, TestFetchError, build_url, run_test_fetch
+from .worker import (
+    _startup_pass,
+    find_stale_count,
+    last_pass_at,
+    needs_backfill,
+    poll_all,
+    run,
+)
 from listings.models import FetchLog, Listing, Source
 
 HTML_WITH_JOBS = (
@@ -931,3 +943,276 @@ class ListingRepositoryTests(TestCase):
         repository.upsert(item, self._source('src-a'))
         listing = Listing.objects.get()
         self.assertIsNone(listing.published_at)
+
+
+# ---------------------------------------------------------------------------
+# Story 1.4: collector worker
+# ---------------------------------------------------------------------------
+
+
+def register_empty_stub(key):
+    """Stub adapter that fetches nothing (no Listing side effects)."""
+
+    @register(key)
+    class EmptyStubAdapter:
+        def fetch(self, keywords):
+            return []
+
+        def parse(self, raw_items):
+            return []
+
+    return EmptyStubAdapter
+
+
+class NeedsBackfillTests(SimpleTestCase):
+    """FIRST_PASS / GAP_OVERDUE / GAP_FRESH: pure backfill decision."""
+
+    def test_first_pass_requires_backfill(self):
+        self.assertTrue(needs_backfill(None, timezone.now()))
+
+    def test_gap_overdue_requires_backfill(self):
+        now = timezone.now()
+        self.assertTrue(needs_backfill(now - timedelta(hours=3), now))
+
+    def test_gap_fresh_does_not_require_backfill(self):
+        now = timezone.now()
+        self.assertFalse(needs_backfill(now - timedelta(minutes=10), now))
+
+    def test_gap_at_exactly_two_intervals_requires_backfill(self):
+        now = timezone.now()
+        gap = 2 * timedelta(minutes=settings.COLLECTOR_INTERVAL_MINUTES)
+        self.assertTrue(needs_backfill(now - gap, now))
+
+    def test_gap_just_under_two_intervals_does_not_require_backfill(self):
+        now = timezone.now()
+        gap = 2 * timedelta(minutes=settings.COLLECTOR_INTERVAL_MINUTES) - timedelta(
+            seconds=1
+        )
+        self.assertFalse(needs_backfill(now - gap, now))
+
+
+class WorkerTests(TestCase):
+    """POLL_ALL isolation, pass/backfill bookkeeping, stale counting."""
+
+    def setUp(self):
+        clear()
+        register_stub(key='stub-ok-a', raw_items=RAW_ITEMS)
+        register_stub(key='stub-ok-b', raw_items=RAW_ITEMS)
+        register_stub(key='stub-fail', fetch_error=ConnectionError('connection refused'))
+        Source.objects.create(
+            name='ok-a', adapter_key='stub-ok-a', config={'keywords': ['python']}
+        )
+        Source.objects.create(
+            name='ok-b', adapter_key='stub-ok-b', config={'keywords': ['python']}
+        )
+        self.failing = Source.objects.create(
+            name='fail', adapter_key='stub-fail', config={'keywords': ['python']}
+        )
+
+    def _listing(self, fingerprint, published_at):
+        return Listing.objects.create(
+            dedup_fingerprint=fingerprint,
+            title=f'Job {fingerprint}',
+            company='Co',
+            url=f'https://co.example/{fingerprint}',
+            published_at=published_at,
+        )
+
+    def test_poll_all_isolates_failures_and_writes_one_pass_row(self):
+        poll_all()  # must not raise (AD-6)
+
+        # both OK sources feed the same 3 raw items -> deduped to 3 listings
+        self.assertEqual(Listing.objects.count(), 3)
+        for listing in Listing.objects.all():
+            self.assertEqual(listing.seen_sources, ['stub-ok-a', 'stub-ok-b'])
+        self.assertEqual(
+            FetchLog.objects.filter(stage='pass', ok=True, source=None).count(), 1
+        )
+        fail_log = FetchLog.objects.get(source=self.failing, ok=False)
+        self.assertEqual(fail_log.stage, 'fetch')
+        self.assertIn('connection refused', fail_log.error)
+        for source in Source.objects.exclude(pk=self.failing.pk):
+            self.assertEqual(
+                FetchLog.objects.filter(source=source, ok=True, stage='persist').count(),
+                1,
+            )
+
+    def test_poll_all_with_no_sources_still_writes_pass_row(self):
+        Source.objects.all().delete()
+        poll_all()
+        self.assertEqual(FetchLog.objects.filter(stage='pass', ok=True).count(), 1)
+
+    def test_last_pass_at_none_until_ok_pass_exists(self):
+        self.assertIsNone(last_pass_at())
+        FetchLog.objects.create(source=None, stage='backfill', ok=True)
+        self.assertIsNone(last_pass_at())
+        FetchLog.objects.create(source=None, stage='pass', ok=False)
+        self.assertIsNone(last_pass_at())
+        FetchLog.objects.create(source=None, stage='pass', ok=True)
+        self.assertEqual(
+            last_pass_at(), FetchLog.objects.get(stage='pass', ok=True).created_at
+        )
+
+    def test_freshness_cutoff_counts_only_published_at_before_cutoff(self):
+        now = timezone.now()
+        self._listing('fresh-2h', now - timedelta(hours=2))
+        self._listing('stale-30h', now - timedelta(hours=30))
+        self._listing('never-fresh', None)
+
+        self.assertEqual(find_stale_count(now - timedelta(hours=24)), 1)
+
+    def test_startup_first_pass_logs_backfill_with_stale_count(self):
+        register_empty_stub('empty-backfill')
+        Source.objects.create(
+            name='empty', adapter_key='empty-backfill', config={'keywords': ['python']}
+        )
+        now = timezone.now()
+        self._listing('stale-30h', now - timedelta(hours=30))
+        self._listing('fresh-2h', now - timedelta(hours=2))
+        self._listing('never-fresh', None)
+
+        _startup_pass()
+
+        backfill = FetchLog.objects.get(stage='backfill', ok=True)
+        self.assertIn('1 listing(s) older than 24h', backfill.error)
+        self.assertIsNone(backfill.source)
+        self.assertEqual(FetchLog.objects.filter(stage='pass', ok=True).count(), 1)
+
+    def test_startup_fresh_start_writes_plain_pass_not_backfill(self):
+        register_empty_stub('empty-fresh')
+        Source.objects.create(
+            name='empty', adapter_key='empty-fresh', config={'keywords': ['python']}
+        )
+        FetchLog.objects.create(source=None, stage='pass', ok=True)
+
+        _startup_pass()
+
+        self.assertEqual(FetchLog.objects.filter(stage='backfill').count(), 0)
+        self.assertEqual(FetchLog.objects.filter(stage='pass', ok=True).count(), 2)
+
+    def test_startup_overdue_gap_logs_backfill(self):
+        Source.objects.all().delete()
+        now = timezone.now()
+        self._listing('stale-30h', now - timedelta(hours=30))
+        self._listing('never-fresh', None)
+        old_pass = FetchLog.objects.create(source=None, stage='pass', ok=True)
+        FetchLog.objects.filter(pk=old_pass.pk).update(
+            created_at=now - timedelta(hours=3)
+        )
+
+        _startup_pass()
+
+        backfill = FetchLog.objects.get(stage='backfill', ok=True)
+        self.assertIn('1 listing(s) older than 24h', backfill.error)
+        self.assertIsNone(backfill.source)
+        self.assertEqual(FetchLog.objects.filter(stage='pass', ok=True).count(), 2)
+
+    def test_second_startup_skips_backfill(self):
+        Source.objects.all().delete()
+
+        _startup_pass()
+        _startup_pass()
+
+        self.assertEqual(FetchLog.objects.filter(stage='backfill', ok=True).count(), 1)
+        self.assertEqual(FetchLog.objects.filter(stage='pass', ok=True).count(), 2)
+
+    def test_freshness_exact_cutoff_not_stale(self):
+        now = timezone.now()
+        cutoff = now - timedelta(hours=24)
+        self._listing('exact-cutoff', cutoff)
+
+        self.assertEqual(find_stale_count(cutoff), 0)
+
+
+class SchedulerTests(TestCase):
+    """INTERVAL_JOB / GRACEFUL_STOP: scheduler wiring without starting it."""
+
+    def setUp(self):
+        clear()
+
+    def _run(self, start_side_effect=None):
+        with patch('apscheduler.schedulers.blocking.BlockingScheduler') as scheduler_cls:
+            scheduler = scheduler_cls.return_value
+            scheduler.start.side_effect = start_side_effect
+            run()
+        return scheduler
+
+    def test_run_registers_one_interval_job_and_starts(self):
+        scheduler = self._run()
+
+        scheduler.add_job.assert_called_once()
+        trigger = scheduler.add_job.call_args[0][1]
+        self.assertEqual(
+            trigger.interval,
+            timedelta(minutes=settings.COLLECTOR_INTERVAL_MINUTES),
+        )
+        self.assertEqual(scheduler.add_job.call_args[1]['id'], 'poll-all')
+        scheduler.start.assert_called_once()
+
+    def test_run_first_pass_writes_backfill_row(self):
+        self._run()
+        self.assertEqual(FetchLog.objects.filter(stage='backfill', ok=True).count(), 1)
+
+    def test_run_fresh_start_writes_no_backfill_row(self):
+        FetchLog.objects.create(source=None, stage='pass', ok=True)
+        self._run()
+        self.assertEqual(FetchLog.objects.filter(stage='backfill').count(), 0)
+
+    def test_keyboard_interrupt_shuts_scheduler_down_cleanly(self):
+        scheduler = self._run(start_side_effect=KeyboardInterrupt)
+        scheduler.shutdown.assert_called_once_with(wait=False)
+
+    def test_interrupt_during_startup_pass_returns_cleanly(self):
+        # REAL BlockingScheduler: Ctrl+C during the startup pass must not
+        # raise SchedulerNotRunningError from shutdown() on a stopped
+        # scheduler (fails pre-patch with the unguarded shutdown call).
+        with patch('collector.worker._startup_pass', side_effect=KeyboardInterrupt):
+            run()
+
+    def test_run_registers_job_on_real_scheduler(self):
+        # REAL BlockingScheduler: start() is stopped via SystemExit (never
+        # blocks); add_job spies on the real registration to capture the job.
+        jobs = []
+        real_add_job = BlockingScheduler.add_job
+
+        def spy_add_job(self, func, trigger, **kwargs):
+            job = real_add_job(self, func, trigger, **kwargs)
+            jobs.append(job)
+            return job
+
+        with patch('collector.worker._startup_pass'), \
+                patch('apscheduler.schedulers.blocking.BlockingScheduler.start',
+                      side_effect=SystemExit), \
+                patch('apscheduler.schedulers.blocking.BlockingScheduler.add_job',
+                      spy_add_job):
+            with self.assertRaises(SystemExit):
+                run()
+
+        self.assertEqual(len(jobs), 1)
+        job = jobs[0]
+        self.assertEqual(
+            job.trigger.interval,
+            timedelta(minutes=settings.COLLECTOR_INTERVAL_MINUTES),
+        )
+        self.assertEqual(job.max_instances, 1)
+        self.assertIs(job.coalesce, True)
+        self.assertEqual(
+            job.misfire_grace_time,
+            settings.COLLECTOR_INTERVAL_MINUTES * 60,
+        )
+
+
+class CollectorCommandTests(SimpleTestCase):
+    """run_collector management command wiring (AD-2 two-process envelope)."""
+
+    def test_command_invokes_run(self):
+        with patch('collector.worker.run') as mock_run:
+            call_command('run_collector')
+        mock_run.assert_called_once()
+
+    def test_command_listed_in_help(self):
+        # Django 6.1 dropped the `help` management command; the command
+        # advertises itself via its non-empty help string instead.
+        from collector.management.commands.run_collector import Command
+
+        self.assertTrue(Command.help)

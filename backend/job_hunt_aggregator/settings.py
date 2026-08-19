@@ -121,3 +121,9 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+
+
+# Collector worker cadence (AD-7, Story 1.4): single source of truth for the
+# interval job. The startup pass backfills when the gap since the last
+# successful pass is >= 2x this value (>= 60 minutes at the default 30).
+COLLECTOR_INTERVAL_MINUTES = 30
