@@ -1,0 +1,99 @@
+{
+  "_probe_date": "2026-08-18",
+  "_probe": {
+    "note": "One-time live probe during Story 1.5 development; response redacted to 3 items (structure preserved).",
+    "endpoint": "https://api.ouedkniss.com/graphql",
+    "request": {
+      "operationName": "SearchQuery",
+      "variables": {
+        "q": "développeur",
+        "filter": {
+          "categorySlug": "offres_demandes_emploi",
+          "origin": null,
+          "connected": false,
+          "delivery": null,
+          "regionIds": [],
+          "cityIds": [],
+          "priceRange": [null, null],
+          "exchange": null,
+          "hasPictures": false,
+          "hasPrice": false,
+          "priceUnit": null,
+          "fields": [],
+          "page": 1,
+          "orderByField": {"field": "REFRESHED_AT"},
+          "count": 50
+        }
+      },
+      "query": "query SearchQuery($q: String, $filter: SearchFilterInput) { search(q: $q, filter: $filter) { announcements { data { id title slug refreshedAt user { displayName } store { name } cities { name } } paginatorInfo { lastPage hasMorePages total } } } }"
+    },
+    "findings": {
+      "search_carries_detail_fields": true,
+      "jobs_category_slug": "offres_demandes_emploi",
+      "spec_era_slug_emploi_returns_zero": true,
+      "url_format": "https://www.ouedkniss.com/{slug}-d{id}",
+      "n1_fallback_needed": false,
+      "introspection_disabled": true,
+      "total_for_q_developpeur": 158
+    }
+  },
+  "data": {
+    "search": {
+      "announcements": {
+        "data": [
+          {
+            "id": "39785675",
+            "title": "développeur web e-commerce",
+            "slug": "commercial-marketing-developpeur-web-e-commerce-kouba-mohammadia-alger-algerie",
+            "refreshedAt": "2026-08-18T20:15:11.000Z",
+            "user": {
+              "displayName": "recrutementgit"
+            },
+            "store": {
+              "name": "Recrutement"
+            },
+            "cities": [
+              {
+                "name": "Kouba"
+              },
+              {
+                "name": "Mohammadia"
+              }
+            ]
+          },
+          {
+            "id": "57225396",
+            "title": "Un Superviseur commercial / Développeur",
+            "slug": "commercial-marketing-un-superviseur-developpeur-birtouta-alger-algerie",
+            "refreshedAt": "2026-08-18T12:03:47.000Z",
+            "user": {
+              "displayName": "societe industrielle"
+            },
+            "store": null,
+            "cities": [
+              {
+                "name": "Birtouta"
+              }
+            ]
+          },
+          {
+            "id": "18339716",
+            "title": "Développeur web",
+            "slug": "informatique-internet-developpeur-web-algerie",
+            "refreshedAt": "2026-08-01T12:09:02.000Z",
+            "user": {
+              "displayName": "rezak"
+            },
+            "store": null,
+            "cities": []
+          }
+        ],
+        "paginatorInfo": {
+          "lastPage": 4,
+          "hasMorePages": true,
+          "total": 158
+        }
+      }
+    }
+  }
+}

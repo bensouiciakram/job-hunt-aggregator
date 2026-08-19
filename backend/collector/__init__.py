@@ -5,6 +5,7 @@ and test-fetched through the generic FR-1 path before the real adapter
 ships; Story 1.6 overwrites this registration with the same key.
 """
 
+from .adapters.ouedkniss_jobs import OuedknissJobsAdapter
 from .registry import register
 
 
@@ -17,3 +18,6 @@ class GoogleJobsStub:
 
     def parse(self, raw_items: list[dict]) -> list[dict]:
         raise NotImplementedError('google-jobs adapter lands in Story 1.6')
+
+
+register('ouedkniss-jobs')(OuedknissJobsAdapter)

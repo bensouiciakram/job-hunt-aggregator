@@ -35,3 +35,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-collector-worker.md`
   summary: Boot-time DB crash fails loud by design — AD-6 isolation is per-source only; startup pass errors are not swallowed.
   evidence: Post-review finding (Story 1.4 patch) — revisit.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-ouedkniss-adapter.md`
+  summary: ouedkniss GraphQL shape drift — site API changes (field renames, category slug changes, GraphQL deprecations) break the adapter silently; surfaced only via worker stale counts / backfill signals; revisit periodically.
+  evidence: Story 1.5 implementation — the live probe (2026-08-18) already showed the spec-era `emploi` category slug returning zero results (the working slug is `offres_demandes_emploi`), and schema introspection is disabled on the endpoint, so drift cannot be detected programmatically.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-ouedkniss-adapter.md`
+  summary: ouedkniss adapter: blank keyword unguarded at the adapter level (q='' is sent) — mitigated upstream by collect_source's Keyword Set validation; revisit if the adapter is ever called directly.
+  evidence: Story 1.5 patch review — `fetch(['python', ''])` pins current behavior (the second SearchQuery sends q='').
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-ouedkniss-adapter.md`
+  summary: ouedkniss 'cities' field currently unmapped (future location-key intent).
+  evidence: Story 1.5 patch review — `cities { name }` is kept in the query for future use; the six-key canonical contract has no location key yet.

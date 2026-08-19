@@ -49,10 +49,14 @@ def post_json(client, url, payload):
 
 
 class ApiTestCase(TestCase):
-    """Registers the stub adapters per test so registry state never leaks."""
+    """Registers the stub adapters per test so registry state never leaks.
+
+    No `clear()`: the ouedkniss-jobs row is registered at import time
+    (Story 1.5) and must survive for the collector full-stack tests; stub
+    registrations are idempotent (re-registering a key overwrites it).
+    """
 
     def setUp(self):
-        clear()
         register('stub-api-adapter')(StubApiAdapter)
         register('google-jobs')(GoogleJobsStub)
 

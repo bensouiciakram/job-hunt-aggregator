@@ -6,9 +6,11 @@ COLLECT_FETCH_FAIL / COLLECT_BAD_ITEM / STATUS_PRESERVED /
 FINGERPRINT_STABLE — with stub adapters; no network in these tests.
 """
 
+import copy
 import json
 import types
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import requests
@@ -18,6 +20,11 @@ from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
+from .adapters.ouedkniss_jobs import (
+    OuedknissAdapterError,
+    OuedknissJobsAdapter,
+    _SEARCH_QUERY,
+)
 from .collect import collect_source
 from .pipeline import (
     clean_item,
@@ -78,11 +85,32 @@ class FakeResponse:
             )
 
 
-class RegistryTests(SimpleTestCase):
-    """FR-1 code-first registry: one module + registry row per site type."""
+class JsonResponse:
+    """requests-like response for GraphQL adapter tests (hermetic)."""
 
-    def setUp(self):
-        clear()
+    def __init__(self, body, status_code=200):
+        self._body = body
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(
+                f'{self.status_code} Server Error', response=self
+            )
+
+    def json(self):
+        if isinstance(self._body, Exception):
+            raise self._body
+        return self._body
+
+
+class RegistryTests(SimpleTestCase):
+    """FR-1 code-first registry: one module + registry row per site type.
+
+    No `clear()` in setUp: the ouedkniss-jobs row is registered at import
+    time (Story 1.5) and must survive for the Ouedkniss* test classes;
+    each test re-registers its own key, so isolation does not need a wipe.
+    """
 
     def test_register_and_get_resolve_class(self):
         @register('test-registry-key')
@@ -547,10 +575,12 @@ class PipelineStageTests(SimpleTestCase):
 
 
 class CollectSourceTests(TestCase):
-    """COLLECT_* matrix rows through the full collect_source path."""
+    """COLLECT_* matrix rows through the full collect_source path.
 
-    def setUp(self):
-        clear()
+    No `clear()` here: the ouedkniss-jobs row is registered at import time
+    (Story 1.5) and must survive for the Ouedkniss* test classes; stub keys
+    are re-registered per test, so isolation does not need a wipe.
+    """
 
     def _source(self, name='source', adapter_key='stub-collect', **config):
         return Source.objects.create(
@@ -757,8 +787,6 @@ class CollectSourceTests(TestCase):
     def test_fetch_none_or_non_iterable_logged_fetch(self):
         for index, bad_output in enumerate((None, 42)):
             with self.subTest(bad_output=bad_output):
-                clear()
-
                 @register('bad-fetch')
                 class BadFetchAdapter:
                     def fetch(self, keywords):
@@ -992,10 +1020,14 @@ class NeedsBackfillTests(SimpleTestCase):
 
 
 class WorkerTests(TestCase):
-    """POLL_ALL isolation, pass/backfill bookkeeping, stale counting."""
+    """POLL_ALL isolation, pass/backfill bookkeeping, stale counting.
+
+    No `clear()` in setUp: the ouedkniss-jobs row is registered at import
+    time (Story 1.5) and must survive for the Ouedkniss* test classes;
+    stub keys are re-registered here, so isolation does not need a wipe.
+    """
 
     def setUp(self):
-        clear()
         register_stub(key='stub-ok-a', raw_items=RAW_ITEMS)
         register_stub(key='stub-ok-b', raw_items=RAW_ITEMS)
         register_stub(key='stub-fail', fetch_error=ConnectionError('connection refused'))
@@ -1127,9 +1159,6 @@ class WorkerTests(TestCase):
 class SchedulerTests(TestCase):
     """INTERVAL_JOB / GRACEFUL_STOP: scheduler wiring without starting it."""
 
-    def setUp(self):
-        clear()
-
     def _run(self, start_side_effect=None):
         with patch('apscheduler.schedulers.blocking.BlockingScheduler') as scheduler_cls:
             scheduler = scheduler_cls.return_value
@@ -1216,3 +1245,396 @@ class CollectorCommandTests(SimpleTestCase):
         from collector.management.commands.run_collector import Command
 
         self.assertTrue(Command.help)
+
+
+# ---------------------------------------------------------------------------
+# Story 1.5: ouedkniss-jobs adapter
+# ---------------------------------------------------------------------------
+
+
+class OuedknissJobsAdapterTests(SimpleTestCase):
+    """Story 1.5 matrix rows — hermetic against the live-probe fixture.
+
+    Every row monkeypatches `requests.post` at the adapter module level;
+    no live network, no DB. The fixture `tests/fixtures/search_response.json`
+    is the recorded probe response (redacted to 3 items).
+    """
+
+    FIXTURE = json.loads(
+        (
+            Path(__file__).parent
+            / 'tests'
+            / 'fixtures'
+            / 'search_response.json'
+        ).read_text(encoding='utf-8')
+    )
+    BODY = {key: value for key, value in FIXTURE.items() if not key.startswith('_')}
+    ITEMS = BODY['data']['search']['announcements']['data']
+
+    def setUp(self):
+        self.adapter = OuedknissJobsAdapter()
+
+    def _patched_post(self, side_effect=None, return_value=None):
+        post = Mock(side_effect=side_effect, return_value=return_value)
+        patcher = patch('collector.adapters.ouedkniss_jobs.requests.post', post)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return post
+
+    def _synthetic(self, index, **overrides):
+        item = copy.deepcopy(self.ITEMS[0])
+        item['id'] = f'99999{index:02d}'
+        item['slug'] = f'synthetic-{index}-algerie'
+        item.update(overrides)
+        return item
+
+    def test_ok_fetch_issues_one_search_query_per_keyword(self):
+        post = self._patched_post(return_value=JsonResponse(self.BODY))
+
+        raw = self.adapter.fetch(['développeur'])
+
+        self.assertEqual(len(raw), 3)
+        post.assert_called_once()
+        call = post.call_args
+        self.assertEqual(call.args[0], 'https://api.ouedkniss.com/graphql')
+        self.assertEqual(call.kwargs['timeout'], 30)
+        self.assertIn('User-Agent', call.kwargs['headers'])
+        payload = call.kwargs['json']
+        self.assertEqual(payload['operationName'], 'SearchQuery')
+        self.assertEqual(payload['variables']['q'], 'développeur')
+        filter_ = payload['variables']['filter']
+        self.assertEqual(filter_['categorySlug'], 'offres_demandes_emploi')
+        self.assertEqual(filter_['page'], 1)
+        self.assertEqual(filter_['count'], 50)
+        self.assertEqual(filter_['orderByField'], {'field': 'REFRESHED_AT'})
+
+    def test_ok_parse_exactly_six_keys_with_fixture_values(self):
+        self._patched_post(return_value=JsonResponse(self.BODY))
+        raw = self.adapter.fetch(['développeur'])
+        parsed = self.adapter.parse(raw)
+
+        self.assertEqual(len(parsed), 3)
+        for item in parsed:
+            self.assertEqual(
+                set(item),
+                {'title', 'company', 'url', 'published_at', 'keywords', 'raw_snapshot'},
+            )
+        first = parsed[0]
+        self.assertEqual(first['title'], 'développeur web e-commerce')
+        self.assertEqual(first['company'], 'recrutementgit')
+        self.assertEqual(
+            first['url'],
+            'https://www.ouedkniss.com/commercial-marketing-developpeur-web-e-commerce-kouba-mohammadia-alger-algerie-d39785675',
+        )
+        self.assertEqual(first['published_at'], '2026-08-18T20:15:11.000Z')
+        self.assertEqual(first['keywords'], ['développeur'])
+        self.assertEqual(first['raw_snapshot'], self.ITEMS[0])
+        # store: null -> company falls back to user.displayName
+        self.assertEqual(parsed[1]['company'], 'societe industrielle')
+
+    def test_keyword_multi_one_call_per_keyword_and_id_dedupe(self):
+        second_body = copy.deepcopy(self.BODY)
+        second_body['data']['search']['announcements']['data'] = [
+            copy.deepcopy(self.ITEMS[1]),
+            self._synthetic(1),
+        ]
+        post = self._patched_post(
+            side_effect=[JsonResponse(self.BODY), JsonResponse(second_body)]
+        )
+
+        raw = self.adapter.fetch(['python', 'django'])
+
+        self.assertEqual(post.call_count, 2)
+        queries = [call.kwargs['json']['variables']['q'] for call in post.call_args_list]
+        self.assertEqual(queries, ['python', 'django'])
+        # 3 items from kw1 + 2 from kw2, minus 1 shared id -> 4 raw items.
+        self.assertEqual(len(raw), 4)
+        shared = [item for item in raw if item['item']['id'] == '57225396']
+        self.assertEqual(len(shared), 1)
+        self.assertEqual(shared[0]['keyword'], 'python')
+
+    def test_sample_capped_at_fifty(self):
+        body = copy.deepcopy(self.BODY)
+        body['data']['search']['announcements']['data'] = [self._synthetic(i) for i in range(60)]
+        post = self._patched_post(return_value=JsonResponse(body))
+
+        raw = self.adapter.fetch(['développeur'])
+
+        self.assertEqual(len(raw), 50)
+        # single keyword: one call; the output cap truncates, not the loop
+        post.assert_called_once()
+
+    def test_no_company_uses_empty_string(self):
+        item = self._synthetic(2)
+        item['user'] = None
+        item['store'] = None
+
+        parsed = self.adapter.parse([{'keyword': 'dev', 'item': item}])
+
+        self.assertEqual(parsed[0]['company'], '')
+        self.assertEqual(
+            set(parsed[0]),
+            {'title', 'company', 'url', 'published_at', 'keywords', 'raw_snapshot'},
+        )
+
+    def test_http_500_raises_with_keyword_context(self):
+        self._patched_post(return_value=JsonResponse('oops', status_code=500))
+
+        with self.assertRaises(OuedknissAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('keyword', message)
+        self.assertIn('500', message)
+
+    def test_network_error_raises_with_keyword_context(self):
+        self._patched_post(side_effect=ConnectionError('connection refused'))
+
+        with self.assertRaises(OuedknissAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn("keyword 'python'", message)
+        self.assertIn('connection refused', message)
+
+    def test_invalid_json_raises_with_keyword_context(self):
+        self._patched_post(
+            return_value=JsonResponse(ValueError('Expecting value: line 1 column 1'))
+        )
+
+        with self.assertRaises(OuedknissAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn("keyword 'python'", message)
+        self.assertIn('Expecting value', message)
+
+    def test_graphql_errors_key_raises(self):
+        self._patched_post(
+            return_value=JsonResponse({'errors': [{'message': 'boom'}]})
+        )
+
+        with self.assertRaises(OuedknissAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('GraphQL errors', message)
+        self.assertIn('boom', message)
+
+    def test_url_pinned_to_live_show_format(self):
+        self._patched_post(return_value=JsonResponse(self.BODY))
+        parsed = self.adapter.parse(self.adapter.fetch(['développeur']))
+
+        for item in parsed:
+            self.assertRegex(
+                item['url'], r'^https://www\.ouedkniss\.com/.+-d\d+$'
+            )
+
+    def test_missing_slug_or_id_skips_item(self):
+        items = [self._synthetic(3), self._synthetic(4), self._synthetic(5)]
+        del items[0]['slug']
+        del items[1]['id']
+
+        parsed = self.adapter.parse([{'keyword': 'dev', 'item': item} for item in items])
+
+        self.assertEqual(len(parsed), 1)
+
+    def test_published_at_none_when_absent(self):
+        item = self._synthetic(6)
+        del item['refreshedAt']
+
+        parsed = self.adapter.parse([{'keyword': 'dev', 'item': item}])
+
+        self.assertIsNone(parsed[0]['published_at'])
+
+    def test_store_name_fallback_when_user_absent(self):
+        item = self._synthetic(7)
+        item['user'] = None
+        item['store'] = {'name': 'Boutique X'}
+
+        parsed = self.adapter.parse([{'keyword': 'dev', 'item': item}])
+
+        self.assertEqual(parsed[0]['company'], 'Boutique X')
+
+    def test_non_string_slug_or_title_skips_item(self):
+        items = [self._synthetic(9), self._synthetic(10)]
+        items[0]['slug'] = 12345  # truthy non-str slug would build a garbage URL
+        items[1]['title'] = 42
+
+        parsed = self.adapter.parse([{'keyword': 'dev', 'item': item} for item in items])
+
+        self.assertEqual(parsed, [])
+
+    def test_timeout_raises_with_keyword_context(self):
+        self._patched_post(side_effect=requests.exceptions.Timeout('timed out'))
+
+        with self.assertRaises(OuedknissAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn("keyword 'python'", message)
+        self.assertIn('timed out', message)
+
+    def test_non_object_json_raises(self):
+        self._patched_post(return_value=JsonResponse([1, 2]))
+
+        with self.assertRaises(OuedknissAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        self.assertIn('non-object JSON', str(ctx.exception))
+
+    def test_missing_search_shape_raises_labelled(self):
+        self._patched_post(return_value=JsonResponse({'data': {}}))
+
+        with self.assertRaises(OuedknissAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('unexpected shape', message)
+        self.assertIn("keyword 'python'", message)
+
+    def test_cap_fifty_one_unique_items_returns_fifty(self):
+        body = copy.deepcopy(self.BODY)
+        body['data']['search']['announcements']['data'] = [
+            self._synthetic(i) for i in range(51)
+        ]
+        post = self._patched_post(return_value=JsonResponse(body))
+
+        raw = self.adapter.fetch(['développeur'])
+
+        self.assertEqual(len(raw), 50)
+        post.assert_called_once()
+
+    def test_cap_mid_keyword_still_queries_remaining_keywords(self):
+        body_one = copy.deepcopy(self.BODY)
+        body_one['data']['search']['announcements']['data'] = [
+            self._synthetic(i) for i in range(50)
+        ]
+        body_two = copy.deepcopy(self.BODY)
+        body_two['data']['search']['announcements']['data'] = [
+            self._synthetic(i) for i in range(50, 53)
+        ]
+        post = self._patched_post(
+            side_effect=[JsonResponse(body_one), JsonResponse(body_two)]
+        )
+
+        raw = self.adapter.fetch(['python', 'django'])
+
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(len(raw), 50)
+        # first-occurrence order: kw1's 50 items fill the cap
+        self.assertTrue(all(item['keyword'] == 'python' for item in raw))
+
+    def test_fetch_empty_keywords_returns_empty(self):
+        post = self._patched_post(return_value=JsonResponse(self.BODY))
+
+        raw = self.adapter.fetch([])
+
+        self.assertEqual(raw, [])
+        post.assert_not_called()
+
+    def test_duplicate_keywords_two_calls_first_tag_wins(self):
+        post = self._patched_post(return_value=JsonResponse(self.BODY))
+
+        raw = self.adapter.fetch(['python', 'python'])
+
+        self.assertEqual(post.call_count, 2)
+        queries = [call.kwargs['json']['variables']['q'] for call in post.call_args_list]
+        self.assertEqual(queries, ['python', 'python'])
+        self.assertEqual(len(raw), 3)
+        self.assertTrue(all(item['keyword'] == 'python' for item in raw))
+
+    def test_blank_keyword_sends_empty_q(self):
+        post = self._patched_post(return_value=JsonResponse(self.BODY))
+
+        raw = self.adapter.fetch(['python', ''])
+
+        self.assertEqual(post.call_count, 2)
+        queries = [call.kwargs['json']['variables']['q'] for call in post.call_args_list]
+        self.assertEqual(queries, ['python', ''])
+
+    def test_data_null_response_returns_empty(self):
+        self._patched_post(return_value=JsonResponse({'data': None}))
+
+        self.assertEqual(self.adapter.fetch(['python']), [])
+
+    def test_search_null_response_returns_empty(self):
+        self._patched_post(return_value=JsonResponse({'data': {'search': None}}))
+
+        self.assertEqual(self.adapter.fetch(['python']), [])
+
+    def test_arabic_title_round_trips_unchanged(self):
+        item = self._synthetic(8)
+        item['title'] = 'مطور ويب'
+
+        parsed = self.adapter.parse([{'keyword': 'web', 'item': item}])
+
+        self.assertEqual(parsed[0]['title'], 'مطور ويب')
+
+    def test_hostile_keyword_round_trips_through_json_payload(self):
+        keyword = 'a"b\\c$d\n'
+        post = self._patched_post(return_value=JsonResponse(self.BODY))
+
+        self.adapter.fetch([keyword])
+
+        payload = post.call_args.kwargs['json']
+        self.assertEqual(
+            json.loads(json.dumps(payload))['variables']['q'], keyword
+        )
+        # the query text is the module constant — never interpolated
+        self.assertEqual(payload['query'], _SEARCH_QUERY)
+
+    def test_fixture_metadata_probe_date_and_total(self):
+        self.assertIn('_probe_date', OuedknissJobsAdapterTests.FIXTURE)
+        paginator = self.BODY['data']['search']['announcements']['paginatorInfo']
+        self.assertGreaterEqual(paginator['total'], len(self.ITEMS))
+
+
+class OuedknissProductionRegistrationTests(SimpleTestCase):
+    """The ouedkniss-jobs registry row comes from import time (no test
+    scaffolding; setUp intentionally does not call clear())."""
+
+    def test_ouedkniss_jobs_production_registration_resolves(self):
+        self.assertIs(get_adapter('ouedkniss-jobs'), OuedknissJobsAdapter)
+
+
+class OuedknissFullStackTests(TestCase):
+    """Story 1.5 acceptance: registered adapter through collect_source.
+
+    Relies on the import-time registration in collector/__init__.py.
+    """
+
+    def test_collect_source_logs_ok_and_stores_listings(self):
+        source = Source.objects.create(
+            name='ouedkniss-jobs',
+            adapter_key='ouedkniss-jobs',
+            config={'keywords': ['développeur']},
+        )
+        items = OuedknissJobsAdapterTests.ITEMS
+        raw = [{'keyword': 'développeur', 'item': item} for item in items]
+        with patch.object(OuedknissJobsAdapter, 'fetch', return_value=raw):
+            created = collect_source(source)
+
+        self.assertEqual(created, len(items))
+        self.assertEqual(Listing.objects.count(), len(items))
+        ok_log = FetchLog.objects.get(source=source, ok=True)
+        self.assertEqual(ok_log.stage, 'persist')
+        self.assertEqual(ok_log.error, '')
+        listing = Listing.objects.get(
+            url='https://www.ouedkniss.com/commercial-marketing-developpeur-web-e-commerce-kouba-mohammadia-alger-algerie-d39785675'
+        )
+        self.assertEqual(listing.title, 'développeur web e-commerce')
+        self.assertEqual(listing.company, 'recrutementgit')
+        self.assertEqual(
+            listing.published_at.isoformat(), '2026-08-18T20:15:11+00:00'
+        )
+        self.assertEqual(listing.keywords, ['développeur'])
+        # extract keeps the raw item verbatim: the fixture item survives
+        # nested inside the stored snapshot chain
+        self.assertEqual(
+            listing.raw_snapshot,
+            {
+                'title': 'développeur web e-commerce',
+                'company': 'recrutementgit',
+                'url': 'https://www.ouedkniss.com/commercial-marketing-developpeur-web-e-commerce-kouba-mohammadia-alger-algerie-d39785675',
+                'published_at': '2026-08-18T20:15:11.000Z',
+                'keywords': ['développeur'],
+                'raw_snapshot': items[0],
+            },
+        )
+        self.assertEqual(listing.source, source)
+        self.assertEqual(listing.seen_sources, ['ouedkniss-jobs'])
+        self.assertEqual(listing.status, 'new')
