@@ -626,3 +626,265 @@ class CorsTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertNotIn('Access-Control-Allow-Origin', response.headers)
+
+
+class ApplyCorsTests(TestCase):
+    """Story 2.1: the apply POST is cross-origin from :3000 (Story 2.2 seam)."""
+
+    def test_preflight_apply_post_allowed_origin(self):
+        response = self.client.options(
+            reverse('apply', args=[1]),
+            HTTP_ORIGIN='http://localhost:3000',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers.get('Access-Control-Allow-Origin'), 'http://localhost:3000'
+        )
+        self.assertIn('POST', response.headers.get('Access-Control-Allow-Methods', ''))
+
+    def test_apply_with_origin_echoed(self):
+        from listings.models import Listing
+
+        listing = Listing.objects.create(
+            title='Job',
+            company='Acme',
+            url='https://example.com/job',
+            published_at=timezone.now(),
+            dedup_fingerprint=compute_fingerprint('Job', 'Acme', 'https://example.com/job'),
+        )
+        response = self.client.post(
+            reverse('apply', args=[listing.id]),
+            data=json.dumps({}),
+            content_type='application/json',
+            HTTP_ORIGIN='http://localhost:3000',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers.get('Access-Control-Allow-Origin'), 'http://localhost:3000'
+        )
+
+    def test_preflight_apply_post_disallowed_origin_gets_no_header(self):
+        response = self.client.options(
+            reverse('apply', args=[1]),
+            HTTP_ORIGIN='https://evil.example',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('Access-Control-Allow-Origin', response.headers)
+
+
+class ApplicationApiTests(TestCase):
+    """Story 2.1 POST /api/listings/<id>/apply/ — FR-4/FR-5, AD-4/AD-5/AD-10."""
+
+    def _listing(self, **overrides):
+        defaults = {
+            'title': 'Job',
+            'company': 'Acme',
+            'url': 'https://example.com/job',
+            'published_at': timezone.now(),
+        }
+        defaults.update(overrides)
+        defaults['dedup_fingerprint'] = compute_fingerprint(
+            defaults['title'], defaults['company'], defaults['url']
+        )
+        return Listing.objects.create(**defaults)
+
+    def test_apply_creates_record_and_flips_status(self):
+        listing = self._listing()
+
+        response = self.client.post(reverse('apply', args=[listing.id]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(set(payload.keys()), {'ok', 'data', 'error'})
+        self.assertTrue(payload['ok'])
+        self.assertIsNone(payload['error'])
+        application = payload['data']['application']
+        self.assertEqual(
+            set(application.keys()), {'id', 'listing', 'created_at', 'outcome'}
+        )
+        self.assertEqual(application['listing'], listing.id)
+        self.assertIsNone(application['outcome'])
+        self.assertEqual(payload['data']['status'], 'applied')
+        listing.refresh_from_db()
+        self.assertEqual(listing.status, 'applied')
+        self.assertEqual(listing.application.listing_id, listing.id)
+
+    def test_reapply_is_idempotent_same_record_no_duplicate(self):
+        listing = self._listing()
+        first = self.client.post(reverse('apply', args=[listing.id])).json()['data']
+        second = self.client.post(reverse('apply', args=[listing.id])).json()['data']
+
+        self.assertEqual(first, second)
+        self.assertEqual(first['application']['id'], second['application']['id'])
+        self.assertEqual(
+            first['application']['created_at'], second['application']['created_at']
+        )
+        self.assertEqual(second['status'], 'applied')
+        listing.refresh_from_db()
+        self.assertEqual(listing.status, 'applied')
+
+    def test_reapply_does_not_downgrade_status(self):
+        listing = self._listing()
+        self.client.post(reverse('apply', args=[listing.id]))
+        listing.status = 'applied'
+        listing.save(update_fields=['status'])
+
+        payload = self.client.post(reverse('apply', args=[listing.id])).json()
+        self.assertEqual(payload['data']['status'], 'applied')
+        self.assertEqual(listing.application.outcome, None)
+
+    def test_apply_unknown_listing_returns_404_envelope(self):
+        response = self.client.post(reverse('apply', args=[999999]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json(), {'ok': False, 'error': 'listing not found'}
+        )
+
+    def test_apply_huge_pk_returns_404_envelope_not_500(self):
+        response = self.client.post(reverse('apply', args=[10**20]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json(), {'ok': False, 'error': 'listing not found'}
+        )
+
+    def test_apply_wrong_method_returns_405(self):
+        listing = self._listing()
+        response = self.client.get(reverse('apply', args=[listing.id]))
+        self.assertEqual(response.status_code, 405)
+
+    def test_db_level_unique_constraint_on_listing(self):
+        from django.db import IntegrityError
+
+        from listings.models import Application
+
+        listing = self._listing()
+        Application.objects.create(listing=listing)
+        with self.assertRaises(IntegrityError):
+            Application.objects.create(listing=listing)
+
+
+class BucketApiTests(TestCase):
+    """Story 2.1 GET /api/listings/?bucket= — the 'new since last visit' bucket."""
+
+    def _listing(self, **overrides):
+        defaults = {
+            'title': 'Job',
+            'company': 'Acme',
+            'url': 'https://example.com/job',
+            'published_at': timezone.now(),
+        }
+        defaults.update(overrides)
+        defaults['dedup_fingerprint'] = compute_fingerprint(
+            defaults['title'], defaults['company'], defaults['url']
+        )
+        return Listing.objects.create(**defaults)
+
+    def test_new_bucket_returns_fresh_unapplied_only(self):
+        self._listing(title='Fresh New', url='https://example.com/1')
+        fresh_applied = self._listing(
+            title='Fresh Applied', url='https://example.com/2'
+        )
+        fresh_applied.status = 'applied'
+        fresh_applied.save(update_fields=['status'])
+        self._listing(
+            title='Old New',
+            url='https://example.com/3',
+            published_at=timezone.now() - timedelta(days=3),
+        )
+
+        response = self.client.get(reverse('listings'), {'bucket': 'new'})
+        payload = response.json()
+        self.assertEqual(set(payload.keys()), {'ok', 'data', 'error'})
+        self.assertTrue(payload['ok'])
+        self.assertIsNone(payload['error'])
+        data = payload['data']
+        titles = [item['title'] for item in data['items']]
+        self.assertEqual(titles, ['Fresh New'])
+        self.assertEqual(data['total'], 1)
+
+    def test_new_bucket_combined_with_keyword(self):
+        self._listing(title='Python Dev Fresh', url='https://example.com/1')
+        self._listing(title='Python Dev Old', url='https://example.com/2',
+                      published_at=timezone.now() - timedelta(days=3))
+        self._listing(title='Rust Fresh', url='https://example.com/3')
+
+        data = self.client.get(
+            reverse('listings'), {'bucket': 'new', 'keyword': 'python'}
+        ).json()['data']
+
+        titles = [item['title'] for item in data['items']]
+        self.assertEqual(titles, ['Python Dev Fresh'])
+        self.assertEqual(data['total'], 1)
+
+    def test_new_bucket_pages_within_the_filtered_set(self):
+        base = timezone.now()
+        for i in range(30):
+            self._listing(
+                title=f'Fresh {i:02d}',
+                url=f'https://example.com/{i}',
+                published_at=base - timedelta(minutes=i),
+            )
+        self._listing(
+            title='Old', url='https://example.com/old',
+            published_at=base - timedelta(days=3),
+        )
+
+        data = self.client.get(
+            reverse('listings'), {'bucket': 'new', 'page': 2}
+        ).json()['data']
+
+        self.assertEqual(data['total'], 30)
+        self.assertFalse(data['has_next'])
+        self.assertEqual(data['page'], 2)
+        self.assertEqual(len(data['items']), 5)
+
+    def test_new_bucket_excludes_null_published_at(self):
+        null_listing = self._listing(
+            title='No Date', url='https://example.com/null', published_at=None
+        )
+        self._listing(title='Fresh', url='https://example.com/fresh')
+
+        new_titles = [
+            item['title']
+            for item in self.client.get(reverse('listings'), {'bucket': 'new'}).json()['data']['items']
+        ]
+        self.assertEqual(new_titles, ['Fresh'])
+        all_titles = {
+            item['title']
+            for item in self.client.get(reverse('listings'), {'bucket': 'all'}).json()['data']['items']
+        }
+        self.assertIn('No Date', all_titles)
+        self.assertEqual(null_listing.status, 'new')
+
+    def test_all_bucket_returns_everything_including_applied(self):
+        self._listing(title='Fresh New', url='https://example.com/1')
+        fresh_applied = self._listing(
+            title='Fresh Applied', url='https://example.com/2'
+        )
+        fresh_applied.status = 'applied'
+        fresh_applied.save(update_fields=['status'])
+        self._listing(
+            title='Old New',
+            url='https://example.com/3',
+            published_at=timezone.now() - timedelta(days=3),
+        )
+
+        data = self.client.get(reverse('listings'), {'bucket': 'all'}).json()['data']
+
+        titles = {item['title'] for item in data['items']}
+        self.assertEqual(titles, {'Fresh New', 'Fresh Applied', 'Old New'})
+        self.assertEqual(data['total'], 3)
+
+    def test_bucket_absent_unchanged_default_behavior(self):
+        self._listing(title='Fresh New', url='https://example.com/1')
+        data = self.client.get(reverse('listings')).json()['data']
+        self.assertEqual(data['total'], 1)
+
+    def test_invalid_bucket_returns_422_envelope(self):
+        response = self.client.get(reverse('listings'), {'bucket': 'weird'})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json(), {'ok': False, 'error': 'invalid bucket'})

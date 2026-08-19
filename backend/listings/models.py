@@ -78,3 +78,28 @@ class FetchLog(models.Model):
 
     def __str__(self):
         return f'{self.source_id} / {self.stage} / ok={self.ok}'
+
+
+class Application(models.Model):
+    """A recorded job application (FR-4/FR-5).
+
+    At most one Application per Listing (AD-5): the OneToOne FK is the
+    DB-level unique constraint; the apply service (listings/services.py)
+    is the only writer (AD-4).
+    """
+
+    listing = models.OneToOneField(
+        Listing,
+        on_delete=models.CASCADE,
+        related_name='application',
+        # AD-5: the unique constraint on listing_id is the idempotence backstop.
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Nullable in v1 (FR-8); Epic 3 owns the choices (response/interview/silence).
+    outcome = models.CharField(max_length=20, null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'application({self.listing_id})'

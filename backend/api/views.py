@@ -8,16 +8,19 @@ origin-less localhost context; admin stays CSRF-protected.
 """
 
 import json
+from datetime import timedelta
 
 from django.db import IntegrityError
 from django.db.models import Q
 from django.http import JsonResponse
+from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
 
 from collector.ports import AdapterNotFound
 from collector.registry import get_adapter
 from collector.test_fetch import TestFetchError, run_test_fetch
 from listings.models import FetchLog, Listing, Source
+from listings.services import apply_to_listing
 
 
 def _ok(data, status=200):
@@ -157,6 +160,15 @@ def _listing_payload(listing):
     }
 
 
+def _application_payload(application):
+    return {
+        'id': application.id,
+        'listing': application.listing_id,
+        'created_at': application.created_at,
+        'outcome': application.outcome,
+    }
+
+
 def _last_sweep_at():
     """created_at of the latest ok=True 'pass' FetchLog, else None (AD-9)."""
     row = (
@@ -168,6 +180,29 @@ def _last_sweep_at():
 
 
 @csrf_exempt
+def apply(request, pk):
+    """POST /api/listings/<pk>/apply/ — record an application (FR-4/FR-5).
+
+    Idempotent: the second call for the same listing returns the existing
+    Application with 200 — no duplicate, no error (AD-5/AD-10).
+    """
+    if request.method != 'POST':
+        return _err('method not allowed', status=405)
+    try:
+        listing = Listing.objects.select_related('source').get(pk=pk)
+    except (Listing.DoesNotExist, OverflowError):
+        # OverflowError: a pk beyond SQLite's 64-bit range (e.g. 10**20)
+        # raises instead of matching — keep the envelope contract.
+        return _err('listing not found', status=404)
+    application, _created = apply_to_listing(listing)
+    data = {
+        'application': _application_payload(application),
+        'status': listing.status,
+    }
+    return JsonResponse({'ok': True, 'data': data, 'error': None}, status=200)
+
+
+@csrf_exempt
 def listings(request):
     """GET /api/listings/ — AD-9 paged list, AD-10 envelope.
 
@@ -175,6 +210,10 @@ def listings(request):
     pinned by test). per_page fixed at PER_PAGE. `page` out of range is
     an empty ok result, not an error; invalid `page` (non-int, <1) is a
     422-style envelope error.
+
+    `bucket` (Epic 2): `new` = the "new since last visit" bucket —
+    published_at within the AD-7 freshness window (now - 24h) AND status
+    != 'applied'; absent or `all` = the full list. Invalid value → 422.
     """
     if request.method != 'GET':
         return _err('method not allowed', status=405)
@@ -187,11 +226,19 @@ def listings(request):
     if page < 1:
         return _err('invalid page', status=422)
 
+    bucket = (request.GET.get('bucket') or '').strip()
+    if 'bucket' in request.GET and bucket not in ('new', 'all'):
+        return _err('invalid bucket', status=422)
+
     queryset = Listing.objects.select_related('source').order_by('-published_at', '-id')
     keyword = (request.GET.get('keyword') or '').strip()
     if keyword:
         queryset = queryset.filter(
             Q(title__icontains=keyword) | Q(company__icontains=keyword)
+        )
+    if bucket == 'new':
+        queryset = queryset.filter(published_at__gte=now() - timedelta(hours=24)).exclude(
+            status=Listing.Status.APPLIED
         )
 
     total = queryset.count()

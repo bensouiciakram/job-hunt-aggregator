@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import FetchLog, Listing, Source
+from .models import Application, FetchLog, Listing, Source
 
 admin.site.register(Source)
 
@@ -15,3 +15,8 @@ class ListingAdmin(admin.ModelAdmin):
 @admin.register(FetchLog)
 class FetchLogAdmin(admin.ModelAdmin):
     list_display = ('source', 'stage', 'ok', 'created_at')
+
+
+@admin.register(Application)
+class ApplicationAdmin(admin.ModelAdmin):
+    list_display = ('listing', 'created_at', 'outcome')
