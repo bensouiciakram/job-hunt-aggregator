@@ -62,3 +62,11 @@ uv run python manage.py run_collector   # collector worker (separate process)
 ## Apps
 
 - `listings/` — models `Source`, `Listing`, `FetchLog` (no `Application` yet; Epic 2).
+
+## Sources
+
+- `ouedkniss-jobs` — ouedkniss GraphQL adapter (Story 1.5).
+- `google-jobs` — live via JobSpy (`python-jobspy`, pinned in
+  `requirements.txt`; requests-based Google Jobs scraper, no API key).
+  JobSpy reverse-engineers Google's endpoints, so Google may block or
+  rate-limit — failures surface as `fetch` FetchLogs and stale counts.

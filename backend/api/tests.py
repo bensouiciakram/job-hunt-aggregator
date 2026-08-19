@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from django.test import TestCase
 from django.urls import reverse
 
-from collector import GoogleJobsStub
+from collector.adapters.google_jobs import GoogleJobsAdapter
 from collector.registry import clear, get_adapter, register
 from listings.models import Source
 
@@ -51,14 +51,14 @@ def post_json(client, url, payload):
 class ApiTestCase(TestCase):
     """Registers the stub adapters per test so registry state never leaks.
 
-    No `clear()`: the ouedkniss-jobs row is registered at import time
-    (Story 1.5) and must survive for the collector full-stack tests; stub
-    registrations are idempotent (re-registering a key overwrites it).
+    No `clear()`: the ouedkniss-jobs and google-jobs rows are registered
+    at import time (Story 1.5/1.6) and must survive for the collector
+    full-stack tests; stub registrations are idempotent (re-registering
+    a key overwrites it).
     """
 
     def setUp(self):
         register('stub-api-adapter')(StubApiAdapter)
-        register('google-jobs')(GoogleJobsStub)
 
 
 class RegisterSourceTests(ApiTestCase):
@@ -82,7 +82,7 @@ class RegisterSourceTests(ApiTestCase):
         self.assertEqual(payload['data']['config'], VALID_CONFIG)
         self.assertEqual(Source.objects.filter(name='Demo').count(), 1)
 
-    def test_register_google_jobs_placeholder_returns_201(self):
+    def test_register_google_jobs_returns_201(self):
         response = post_json(
             self.client,
             reverse('sources'),
@@ -307,8 +307,8 @@ class ListSourcesTests(ApiTestCase):
 
 
 class RegistryResolutionTests(ApiTestCase):
-    def test_google_jobs_placeholder_resolves(self):
-        self.assertIs(get_adapter('google-jobs'), GoogleJobsStub)
+    def test_google_jobs_resolves_to_registered_adapter(self):
+        self.assertIs(get_adapter('google-jobs'), GoogleJobsAdapter)
 
 
 class TestFetchApiTests(ApiTestCase):

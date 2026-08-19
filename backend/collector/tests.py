@@ -9,10 +9,12 @@ FINGERPRINT_STABLE — with stub adapters; no network in these tests.
 import copy
 import json
 import types
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import numpy as np
+import pandas as pd
 import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 from django.conf import settings
@@ -20,6 +22,12 @@ from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
+from .adapters.google_jobs import (
+    DEFAULT_HOURS_OLD,
+    GoogleJobsAdapter,
+    GoogleJobsAdapterError,
+    _sanitize_value,
+)
 from .adapters.ouedkniss_jobs import (
     OuedknissAdapterError,
     OuedknissJobsAdapter,
@@ -141,12 +149,6 @@ class RegistryTests(SimpleTestCase):
             @register('not-an-adapter')
             class NotAnAdapter:
                 pass
-
-    def test_google_jobs_placeholder_resolves(self):
-        from collector import GoogleJobsStub
-
-        register('google-jobs')(GoogleJobsStub)
-        self.assertIs(get_adapter('google-jobs'), GoogleJobsStub)
 
 
 class BuildUrlTests(SimpleTestCase):
@@ -1637,4 +1639,410 @@ class OuedknissFullStackTests(TestCase):
         )
         self.assertEqual(listing.source, source)
         self.assertEqual(listing.seen_sources, ['ouedkniss-jobs'])
+        self.assertEqual(listing.status, 'new')
+
+
+# ---------------------------------------------------------------------------
+# Story 1.6: google-jobs adapter (JobSpy)
+# ---------------------------------------------------------------------------
+
+
+class GoogleJobsAdapterTests(SimpleTestCase):
+    """Story 1.6 matrix rows — hermetic against the recorded fixture.
+
+    Every row monkeypatches `scrape_jobs` at the adapter module level
+    (`collector.adapters.google_jobs.scrape_jobs`); no live network, no
+    DB. The fixture `tests/fixtures/google_jobs_probe.json`
+    records the probe outcome (2026-08-19: the live call succeeded but
+    Google returned an empty DataFrame) and the verified JobSpy 1.1.82
+    output schema (`desired_order` columns; `date_posted` is the posting
+    date column — the spec-era `listed_time`/`posting_date` names do not
+    exist in this version).
+    """
+
+    FIXTURE = json.loads(
+        (
+            Path(__file__).parent
+            / 'tests'
+            / 'fixtures'
+            / 'google_jobs_probe.json'
+        ).read_text(encoding='utf-8')
+    )
+    ROWS = FIXTURE['rows']
+
+    def setUp(self):
+        self.adapter = GoogleJobsAdapter()
+
+    def _patched_scrape(self, side_effect=None, return_value=None):
+        scrape = Mock(side_effect=side_effect, return_value=return_value)
+        patcher = patch('collector.adapters.google_jobs.scrape_jobs', scrape)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return scrape
+
+    def _fixture_df(self, rows=None):
+        return pd.DataFrame(rows if rows is not None else self.ROWS)
+
+    def _synthetic(self, index, **overrides):
+        row = copy.deepcopy(self.ROWS[0])
+        row['id'] = f'go-9{index:03d}'
+        row['job_url'] = f'https://careers.example.com/jobs/{index}'
+        row['title'] = f'Synthetic Job {index}'
+        row.update(overrides)
+        return row
+
+    def test_ok_fetch_one_call_per_keyword_with_verified_kwargs(self):
+        scrape = self._patched_scrape(return_value=self._fixture_df())
+
+        raw = self.adapter.fetch(['développeur'])
+
+        self.assertEqual(len(raw), 3)
+        scrape.assert_called_once()
+        call = scrape.call_args
+        self.assertEqual(call.kwargs['site_name'], 'google')
+        self.assertEqual(call.kwargs['search_term'], 'développeur')
+        self.assertEqual(call.kwargs['location'], 'Algeria')
+        self.assertEqual(call.kwargs['results_wanted'], 50)
+        self.assertEqual(call.kwargs['hours_old'], 24)
+        json.dumps(raw)  # sanitized at the seam: fully JSON-serializable
+        for item in raw:
+            self.assertEqual(set(item), {'keyword', 'item'})
+            self.assertEqual(item['keyword'], 'développeur')
+
+    def test_ok_parse_exactly_six_keys_with_fixture_values(self):
+        self._patched_scrape(return_value=self._fixture_df())
+        raw = self.adapter.fetch(['développeur'])
+        parsed = self.adapter.parse(raw)
+
+        self.assertEqual(len(parsed), 3)
+        for item in parsed:
+            self.assertEqual(
+                set(item),
+                {'title', 'company', 'url', 'published_at', 'keywords', 'raw_snapshot'},
+            )
+        first = parsed[0]
+        self.assertEqual(first['title'], self.ROWS[0]['title'])
+        self.assertEqual(first['company'], self.ROWS[0]['company'])
+        self.assertEqual(first['url'], self.ROWS[0]['job_url'])
+        self.assertEqual(first['published_at'], self.ROWS[0]['date_posted'])
+        self.assertEqual(first['keywords'], ['développeur'])
+        self.assertEqual(first['raw_snapshot'], raw[0]['item'])
+
+    def test_keyword_multi_one_call_per_keyword_and_url_dedupe(self):
+        second_rows = [
+            copy.deepcopy(self.ROWS[0]),
+            self._synthetic(1),
+            self._synthetic(2),
+        ]
+        scrape = self._patched_scrape(
+            side_effect=[self._fixture_df(), self._fixture_df(second_rows)]
+        )
+
+        raw = self.adapter.fetch(['python', 'django'])
+
+        self.assertEqual(scrape.call_count, 2)
+        terms = [call.kwargs['search_term'] for call in scrape.call_args_list]
+        self.assertEqual(terms, ['python', 'django'])
+        # 3 items from kw1 + 3 from kw2, minus 1 shared job_url -> 5 raw
+        self.assertEqual(len(raw), 5)
+        shared = [
+            item
+            for item in raw
+            if item['item']['job_url'] == self.ROWS[0]['job_url']
+        ]
+        self.assertEqual(len(shared), 1)
+        self.assertEqual(shared[0]['keyword'], 'python')
+
+    def test_empty_result_returns_empty(self):
+        scrape = self._patched_scrape(return_value=pd.DataFrame())
+
+        self.assertEqual(self.adapter.fetch(['python']), [])
+
+        scrape.assert_called_once()
+
+    def test_api_error_raises_with_keyword_context(self):
+        self._patched_scrape(side_effect=ConnectionError('google blocked us'))
+
+        with self.assertRaises(GoogleJobsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn("keyword 'python'", message)
+        self.assertIn('google blocked us', message)
+
+    def test_timestamp_sanitize_to_json_safe(self):
+        df = pd.DataFrame([
+            {
+                'title': 'Dev',
+                'company': 'Co',
+                'job_url': 'https://g.example/1',
+                'date_posted': pd.Timestamp('2026-08-18T10:00:00'),
+                'min_amount': np.nan,
+                'company_reviews_count': None,
+                'is_remote': np.bool_(False),
+            },
+            {
+                'title': 'Dev 2',
+                'company': 'Co 2',
+                'job_url': 'https://g.example/2',
+                'date_posted': pd.NaT,
+                'min_amount': 10.0,
+                'company_reviews_count': 3,
+                # realistic drift shape: a python date cell in listed_time
+                'listed_time': date(2026, 8, 17),
+                'is_remote': np.bool_(True),
+            },
+        ])
+        # object dtype keeps the numpy scalar in the cell through to_dict
+        df['company_reviews_count'] = df['company_reviews_count'].astype(object)
+        df.loc[0, 'company_reviews_count'] = np.int64(7)
+        df['is_remote'] = df['is_remote'].astype(object)
+        self._patched_scrape(return_value=df)
+
+        raw = self.adapter.fetch(['python'])
+        parsed = self.adapter.parse(raw)
+
+        first = raw[0]['item']
+        self.assertEqual(first['date_posted'], '2026-08-18T10:00:00')
+        self.assertIsNone(first['min_amount'])
+        self.assertEqual(first['company_reviews_count'], 7)
+        self.assertIsInstance(first['company_reviews_count'], int)
+        self.assertIs(first['is_remote'], False)
+        second = raw[1]['item']
+        self.assertIsNone(second['date_posted'])
+        self.assertEqual(second['listed_time'], '2026-08-17')
+        self.assertIs(second['is_remote'], True)
+        json.dumps(raw)  # sanitized at the seam: fully JSON-serializable
+        json.dumps(parsed)  # canonical dicts are JSON-serializable too
+        self.assertEqual(parsed[1]['published_at'], '2026-08-17')
+
+    def test_sanitize_value_numpy_scalars(self):
+        self.assertEqual(_sanitize_value(np.int64(5)), 5)
+        self.assertEqual(_sanitize_value(np.float64(2.5)), 2.5)
+        self.assertIsNone(_sanitize_value(np.float64('nan')))
+        self.assertIsNone(_sanitize_value(pd.NaT))
+        self.assertIsNone(_sanitize_value(pd.NA))
+        self.assertEqual(
+            _sanitize_value(pd.Timestamp('2026-08-18T10:00:00')),
+            '2026-08-18T10:00:00',
+        )
+
+    def test_non_dataframe_return_raises_labelled(self):
+        # scrape_jobs drift: dict/list instead of a DataFrame would
+        # AttributeError on .to_dict — must surface as the labelled
+        # error with keyword context, never a bare AttributeError.
+        for bad in ({'a': 1}, [1, 2]):
+            with self.subTest(return_value=bad):
+                with patch(
+                    'collector.adapters.google_jobs.scrape_jobs', return_value=bad
+                ):
+                    with self.assertRaises(GoogleJobsAdapterError) as ctx:
+                        self.adapter.fetch(['python'])
+                message = str(ctx.exception)
+                self.assertIn("keyword 'python'", message)
+                self.assertIn("object has no attribute 'to_dict'", message)
+
+    def test_df_conversion_failure_raises_labelled(self):
+        self._patched_scrape(return_value=self._fixture_df())
+        with patch.object(
+            pd.DataFrame, 'to_dict', side_effect=ValueError('to_dict exploded')
+        ):
+            with self.assertRaises(GoogleJobsAdapterError) as ctx:
+                self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn("keyword 'python'", message)
+        self.assertIn('to_dict exploded', message)
+
+    def test_date_posted_as_datetime_date(self):
+        # jobspy's google path emits datetime.date in date_posted; a
+        # python date cell must sanitize to the date-only ISO string.
+        df = pd.DataFrame([
+            {
+                'title': 'Dev',
+                'company': 'Co',
+                'job_url': 'https://g.example/1',
+                'date_posted': date(2026, 8, 18),
+            },
+        ])
+        self._patched_scrape(return_value=df)
+
+        raw = self.adapter.fetch(['python'])
+
+        self.assertEqual(raw[0]['item']['date_posted'], '2026-08-18')
+        parsed = self.adapter.parse(raw)
+        self.assertEqual(parsed[0]['published_at'], '2026-08-18')
+
+    def test_timestamp_tz_aware_iso(self):
+        df = pd.DataFrame([
+            {
+                'title': 'Dev',
+                'company': 'Co',
+                'job_url': 'https://g.example/1',
+                'date_posted': pd.Timestamp('2026-08-18T10:00:00+01:00'),
+            },
+        ])
+        self._patched_scrape(return_value=df)
+
+        raw = self.adapter.fetch(['python'])
+
+        # offset preserved through isoformat, not shifted to UTC
+        self.assertEqual(raw[0]['item']['date_posted'], '2026-08-18T10:00:00+01:00')
+        self.assertEqual(
+            self.adapter.parse(raw)[0]['published_at'], '2026-08-18T10:00:00+01:00'
+        )
+
+    def test_published_at_fallback_column(self):
+        # no date_posted column: _posted_at must fall back to the
+        # spec-era names listed_time / posting_date (drift fallbacks).
+        df = pd.DataFrame([
+            {
+                'title': 'Dev',
+                'company': 'Co',
+                'job_url': 'https://g.example/1',
+                'listed_time': '2026-08-17',
+            },
+            {
+                'title': 'Dev 2',
+                'company': 'Co 2',
+                'job_url': 'https://g.example/2',
+                'posting_date': '2026-08-16',
+            },
+        ])
+        self._patched_scrape(return_value=df)
+
+        parsed = self.adapter.parse(self.adapter.fetch(['python']))
+
+        self.assertEqual(parsed[0]['published_at'], '2026-08-17')
+        self.assertEqual(parsed[1]['published_at'], '2026-08-16')
+
+    def test_hours_old_zero_defaults(self):
+        # 0 is falsy in jobspy's google path (disables the freshness
+        # window -> unbounded scrape); negatives widen to 'last month'.
+        for bad in (0, -5, None):
+            with self.subTest(hours_old=bad):
+                adapter = GoogleJobsAdapter(config={'hours_old': bad})
+                with patch(
+                    'collector.adapters.google_jobs.scrape_jobs',
+                    return_value=self._fixture_df(),
+                ) as scrape:
+                    adapter.fetch(['python'])
+                self.assertEqual(scrape.call_args.kwargs['hours_old'], DEFAULT_HOURS_OLD)
+
+    def test_no_company_uses_empty_string(self):
+        df = pd.DataFrame([
+            {'title': 'Dev', 'company': None, 'job_url': 'https://g.example/1'},
+            {'title': 'Dev 2', 'company': np.nan, 'job_url': 'https://g.example/2'},
+        ])
+        self._patched_scrape(return_value=df)
+
+        parsed = self.adapter.parse(self.adapter.fetch(['dev']))
+
+        self.assertEqual(parsed[0]['company'], '')
+        self.assertEqual(parsed[1]['company'], '')
+        self.assertEqual(
+            set(parsed[0]),
+            {'title', 'company', 'url', 'published_at', 'keywords', 'raw_snapshot'},
+        )
+
+    def test_cap_boundary_fifty_one_unique_urls_returns_fifty(self):
+        rows = [self._synthetic(i) for i in range(51)]
+        scrape = self._patched_scrape(
+            side_effect=[self._fixture_df(rows[:50]), self._fixture_df(rows[50:])]
+        )
+
+        raw = self.adapter.fetch(['python', 'django'])
+
+        # all keywords searched: the cap never short-circuits the loop
+        self.assertEqual(scrape.call_count, 2)
+        self.assertEqual(len(raw), 50)
+        # first-occurrence order: kw1's 50 items fill the cap
+        self.assertTrue(all(item['keyword'] == 'python' for item in raw))
+
+    def test_fetch_empty_keywords_returns_empty(self):
+        scrape = self._patched_scrape(return_value=self._fixture_df())
+
+        self.assertEqual(self.adapter.fetch([]), [])
+
+        scrape.assert_not_called()
+
+    def test_blank_keyword_sent_as_search_term(self):
+        scrape = self._patched_scrape(return_value=self._fixture_df())
+
+        self.adapter.fetch(['python', ''])
+
+        self.assertEqual(scrape.call_count, 2)
+        terms = [call.kwargs['search_term'] for call in scrape.call_args_list]
+        self.assertEqual(terms, ['python', ''])
+
+    def test_duplicate_keywords_two_calls_first_tag_wins(self):
+        scrape = self._patched_scrape(return_value=self._fixture_df())
+
+        raw = self.adapter.fetch(['python', 'python'])
+
+        self.assertEqual(scrape.call_count, 2)
+        self.assertEqual(len(raw), 3)
+        self.assertTrue(all(item['keyword'] == 'python' for item in raw))
+
+    def test_fixture_probe_metadata(self):
+        self.assertEqual(GoogleJobsAdapterTests.FIXTURE['_probe_date'], '2026-08-19')
+        self.assertEqual(
+            GoogleJobsAdapterTests.FIXTURE['_probe']['outcome'],
+            'empty DataFrame (call succeeded; Google served no results for the window)',
+        )
+        for name in ('title', 'company', 'job_url', 'date_posted'):
+            self.assertIn(name, GoogleJobsAdapterTests.FIXTURE['columns'])
+
+
+class GoogleJobsProductionRegistrationTests(SimpleTestCase):
+    """The google-jobs registry row comes from import time (no test
+    scaffolding; setUp intentionally does not call clear())."""
+
+    def test_google_jobs_production_registration_resolves(self):
+        self.assertIs(get_adapter('google-jobs'), GoogleJobsAdapter)
+
+
+class GoogleJobsFullStackTests(TestCase):
+    """Story 1.6 acceptance: registered adapter through collect_source.
+
+    Relies on the import-time registration in collector/__init__.py.
+    """
+
+    def test_collect_source_logs_ok_and_stores_listings(self):
+        source = Source.objects.create(
+            name='google-jobs',
+            adapter_key='google-jobs',
+            config={'keywords': ['développeur']},
+        )
+        rows = GoogleJobsAdapterTests.ROWS
+        raw = [{'keyword': 'développeur', 'item': row} for row in rows]
+        with patch.object(GoogleJobsAdapter, 'fetch', return_value=raw):
+            created = collect_source(source)
+
+        self.assertEqual(created, len(rows))
+        self.assertEqual(Listing.objects.count(), len(rows))
+        ok_log = FetchLog.objects.get(source=source, ok=True)
+        self.assertEqual(ok_log.stage, 'persist')
+        self.assertEqual(ok_log.error, '')
+        listing = Listing.objects.get(url=rows[0]['job_url'])
+        self.assertEqual(listing.title, rows[0]['title'])
+        self.assertEqual(listing.company, rows[0]['company'])
+        # date-only fixture date_posted normalizes to midnight UTC
+        self.assertEqual(
+            listing.published_at.isoformat(), '2026-08-18T00:00:00+00:00'
+        )
+        self.assertEqual(listing.keywords, ['développeur'])
+        # extract keeps the raw item verbatim: the fixture row survives
+        # nested inside the stored snapshot chain
+        self.assertEqual(
+            listing.raw_snapshot,
+            {
+                'title': rows[0]['title'],
+                'company': rows[0]['company'],
+                'url': rows[0]['job_url'],
+                'published_at': rows[0]['date_posted'],
+                'keywords': ['développeur'],
+                'raw_snapshot': rows[0],
+            },
+        )
+        self.assertEqual(listing.source, source)
+        self.assertEqual(listing.seen_sources, ['google-jobs'])
         self.assertEqual(listing.status, 'new')

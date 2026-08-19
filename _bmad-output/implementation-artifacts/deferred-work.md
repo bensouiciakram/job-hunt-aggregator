@@ -44,3 +44,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-ouedkniss-adapter.md`
   summary: ouedkniss 'cities' field currently unmapped (future location-key intent).
   evidence: Story 1.5 patch review — `cities { name }` is kept in the query for future use; the six-key canonical contract has no location key yet.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-google-jobs-adapter.md`
+  summary: google-jobs/google blocking risk — JobSpy's reverse-engineered Google Jobs endpoints may break or rate-limit without warning; surfaced only via worker stale counts / FetchLog failures; the python-jobspy version pin is the mitigation.
+  evidence: Story 1.6 implementation — the live probe (2026-08-19) succeeded but returned an empty DataFrame for the 24h window, so real-world availability is only visible through collection outcomes; hermetic tests mock the transport and the adapter is pinned to python-jobspy 1.1.82.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-google-jobs-adapter.md`
+  summary: jobspy's google path sorts the mixed date/None `date_posted` column — a TypeError from comparing `datetime.date` with `None` wraps into a labelled fetch failure; unexercised since the probe returned empty; monitor via future probes.
+  evidence: Story 1.6 patch review — the fixture is date-only (no None cells), so mixed-type sorting is untested; revisit when a real scrape returns mixed date_posted values.

@@ -2,3 +2,4 @@ Django>=6.1,<7
 apscheduler>=3,<4
 requests>=2.31
 parsel>=1.11
+python-jobspy>=1.1.82,<2

@@ -1,23 +1,13 @@
 """collector package: SourcePort boundary, code-first adapter registry, test-fetch.
 
-Registers the `google-jobs` placeholder stub so a Source can be registered
-and test-fetched through the generic FR-1 path before the real adapter
-ships; Story 1.6 overwrites this registration with the same key.
+Each adapter lives in `collector/adapters/` and is registered here by
+kebab-case adapter_key (FR-1): `google-jobs` (JobSpy) and
+`ouedkniss-jobs` (ouedkniss GraphQL).
 """
 
+from .adapters.google_jobs import GoogleJobsAdapter
 from .adapters.ouedkniss_jobs import OuedknissJobsAdapter
 from .registry import register
 
-
-@register('google-jobs')
-class GoogleJobsStub:
-    """Placeholder adapter — replaced by the real google-jobs adapter (Story 1.6)."""
-
-    def fetch(self, keywords: list[str]) -> list[dict]:
-        raise NotImplementedError('google-jobs adapter lands in Story 1.6')
-
-    def parse(self, raw_items: list[dict]) -> list[dict]:
-        raise NotImplementedError('google-jobs adapter lands in Story 1.6')
-
-
+register('google-jobs')(GoogleJobsAdapter)
 register('ouedkniss-jobs')(OuedknissJobsAdapter)
