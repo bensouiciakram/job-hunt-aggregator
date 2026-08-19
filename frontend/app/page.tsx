@@ -1,24 +1,9 @@
+import BucketToggle from "./components/bucket-toggle";
+import ListingsView, { type ListingItem } from "./components/listings-view";
 import PaginationControls from "./components/pagination";
 import RefreshButton from "./components/refresh-button";
 import SearchBox from "./components/search-box";
-
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(
-  /\/+$/,
-  "",
-);
-
-type SourceRef = { name: string; adapter_key: string } | null;
-
-type ListingItem = {
-  id: number;
-  title: string;
-  company: string;
-  url: string;
-  published_at: string | null;
-  source: SourceRef;
-  status: string;
-  keywords: string[];
-};
+import { API_URL } from "./lib/api";
 
 type ListingsData = {
   items: ListingItem[];
@@ -45,8 +30,13 @@ function formatRelative(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
-async function fetchListings(page: number, keyword: string): Promise<ListingsResponse> {
+async function fetchListings(
+  page: number,
+  keyword: string,
+  bucket: "new" | "all",
+): Promise<ListingsResponse> {
   const params = new URLSearchParams();
+  params.set("bucket", bucket);
   if (page > 1) params.set("page", String(page));
   if (keyword) params.set("keyword", keyword);
   const qs = params.toString();
@@ -58,8 +48,16 @@ async function fetchListings(page: number, keyword: string): Promise<ListingsRes
   return response.json();
 }
 
+function parseBucket(value: string | string[] | undefined): "new" | "all" {
+  return typeof value === "string" && value === "all" ? "all" : "new";
+}
+
 export default async function HomePage(props: {
-  searchParams: Promise<{ page?: string | string[]; keyword?: string | string[] }>;
+  searchParams: Promise<{
+    page?: string | string[];
+    keyword?: string | string[];
+    bucket?: string | string[];
+  }>;
 }) {
   const searchParams = await props.searchParams;
   const rawPage = searchParams.page;
@@ -67,11 +65,12 @@ export default async function HomePage(props: {
     typeof rawPage === "string" && /^\d+$/.test(rawPage) ? Math.max(1, Number(rawPage)) : 1;
   const rawKeyword = searchParams.keyword;
   const keyword = typeof rawKeyword === "string" ? rawKeyword.trim() : "";
+  const bucket = parseBucket(searchParams.bucket);
 
   let data: ListingsData | null = null;
   let error: string | null = null;
   try {
-    const result = await fetchListings(page, keyword);
+    const result = await fetchListings(page, keyword, bucket);
     if (result.ok) {
       data = result.data;
     } else {
@@ -92,9 +91,17 @@ export default async function HomePage(props: {
         </header>
 
         <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-          <SearchBox key={keyword} keyword={keyword} />
+          <div className="flex flex-wrap items-center gap-4">
+            <SearchBox key={`${keyword}-${bucket}`} keyword={keyword} bucket={bucket} />
+            <BucketToggle bucket={bucket} keyword={keyword} page={page} />
+          </div>
           {data && (
-            <PaginationControls page={data.page} hasNext={data.has_next} keyword={keyword} />
+            <PaginationControls
+              page={data.page}
+              hasNext={data.has_next}
+              keyword={keyword}
+              bucket={bucket}
+            />
           )}
         </div>
 
@@ -103,51 +110,14 @@ export default async function HomePage(props: {
             <h2 className="font-semibold">Could not load listings</h2>
             <p className="mt-1 text-sm">{error}</p>
           </div>
-        ) : data && data.items.length === 0 ? (
-          <div className="mt-8 rounded-lg border border-zinc-200 bg-zinc-50 p-6 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
-            {keyword
-              ? "No listings match your search."
-              : data.page > 1
-                ? "No more pages."
-                : "No listings yet. The collector has not found any postings."}
-          </div>
         ) : data ? (
-          <ul className="mt-8 divide-y divide-zinc-200 dark:divide-zinc-800">
-            {data.items.map((item) => {
-              const href = /^https?:$/i.test(new URL(item.url).protocol)
-                ? item.url
-                : undefined;
-              return (
-                <li key={item.id} className="py-5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="break-words text-lg font-medium">{item.title}</h2>
-                    {item.source && (
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                        {item.source.name}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1 break-words text-sm text-zinc-600 dark:text-zinc-400">
-                    {item.company} · {formatRelative(item.published_at)}
-                  </p>
-                  {href ? (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 inline-block text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
-                    >
-                      Open posting
-                    </a>
-                  ) : (
-                    <span className="mt-2 inline-block break-words text-sm text-zinc-500 dark:text-zinc-400">
-                      {item.url}
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+          <ListingsView
+            key={`${bucket}-${keyword}-${data.page}`}
+            initialItems={data.items}
+            bucket={bucket}
+            keyword={keyword}
+            page={data.page}
+          />
         ) : null}
       </main>
     </div>

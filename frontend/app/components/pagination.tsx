@@ -2,13 +2,14 @@
 
 import { useRouter } from "next/navigation";
 
-type Props = { page: number; hasNext: boolean; keyword: string };
+type Props = { page: number; hasNext: boolean; keyword: string; bucket: "new" | "all" };
 
-export default function PaginationControls({ page, hasNext, keyword }: Props) {
+export default function PaginationControls({ page, hasNext, keyword, bucket }: Props) {
   const router = useRouter();
 
   function href(targetPage: number) {
     const params = new URLSearchParams();
+    if (bucket !== "new") params.set("bucket", bucket);
     if (targetPage > 1) params.set("page", String(targetPage));
     if (keyword) params.set("keyword", keyword);
     const qs = params.toString();

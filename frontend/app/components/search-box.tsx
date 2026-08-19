@@ -3,12 +3,22 @@
 import { useRouter } from "next/navigation";
 import { useState, type FocusEvent, type FormEvent } from "react";
 
-export default function SearchBox({ keyword }: { keyword: string }) {
+export default function SearchBox({
+  keyword,
+  bucket,
+}: {
+  keyword: string;
+  bucket: "new" | "all";
+}) {
   const router = useRouter();
   const [value, setValue] = useState(keyword);
 
   function pushKeyword(next: string) {
-    router.push(next ? `/?keyword=${encodeURIComponent(next)}` : "/");
+    const params = new URLSearchParams();
+    if (bucket !== "new") params.set("bucket", bucket);
+    if (next) params.set("keyword", next);
+    const qs = params.toString();
+    router.push(`/${qs ? `?${qs}` : ""}`);
   }
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
