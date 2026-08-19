@@ -1125,6 +1125,9 @@ class WorkerTests(TestCase):
 
     def test_startup_first_pass_logs_backfill_with_stale_count(self):
         register_empty_stub('empty-backfill')
+        # isolate from the setUp stub sources: their RAW_ITEMS rows carry
+        # fixed fixture dates that may be stale on any given run day
+        Source.objects.all().delete()
         Source.objects.create(
             name='empty', adapter_key='empty-backfill', config={'keywords': ['python']}
         )

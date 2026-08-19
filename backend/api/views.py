@@ -21,6 +21,7 @@ from collector.ports import AdapterNotFound
 from collector.registry import get_adapter
 from collector.test_fetch import TestFetchError, run_test_fetch
 from judge.scoring import score as score_listing
+from judge.signals import compute_signals
 from listings.models import FetchLog, Listing, Source
 from listings.services import apply_to_listing
 
@@ -142,7 +143,7 @@ def test_fetch(request, pk):
 PER_PAGE = 25
 
 
-def _listing_payload(listing):
+def _listing_payload(listing, signals=None):
     return {
         'id': listing.id,
         'title': listing.title,
@@ -160,6 +161,11 @@ def _listing_payload(listing):
         'status': listing.status,
         'keywords': listing.keywords,
         'interest_score': score_listing(listing, settings.INTEREST_PROFILE),
+        'signals': signals or {
+            'cross_posted': False,
+            'churn_possible': False,
+            'growth_possible': False,
+        },
     }
 
 
@@ -250,10 +256,11 @@ def listings(request):
     # on the last page instead of raising.
     page = min(page, max(1, (total + PER_PAGE - 1) // PER_PAGE))
     start = (page - 1) * PER_PAGE
-    items = queryset[start : start + PER_PAGE]
+    items = list(queryset[start : start + PER_PAGE])
+    signals = compute_signals(items)
 
     data = {
-        'items': [_listing_payload(l) for l in items],
+        'items': [_listing_payload(l, signals.get(l.id)) for l in items],
         'page': page,
         'has_next': start + PER_PAGE < total,
         'total': total,

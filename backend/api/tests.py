@@ -17,7 +17,8 @@ from collector.adapters.google_jobs import GoogleJobsAdapter
 from collector.pipeline import compute_fingerprint
 from collector.registry import clear, get_adapter, register
 from judge.scoring import score, score_text
-from listings.models import FetchLog, Listing, Source
+from judge.signals import compute_signals
+from listings.models import FetchLog, Listing, ListingDeletion, Source
 
 
 class StubApiAdapter:
@@ -466,7 +467,7 @@ class ListingsApiTests(ApiTestCase):
         self.assertEqual(
             set(item.keys()),
             {'id', 'title', 'company', 'url', 'published_at', 'source', 'status',
-             'keywords', 'interest_score'},
+             'keywords', 'interest_score', 'signals'},
         )
         self.assertEqual(item['source'], {'name': 'Demo', 'adapter_key': 'stub-api-adapter'})
         self.assertEqual(item['status'], 'new')
@@ -1038,3 +1039,200 @@ class ScoringTests(TestCase):
         self.assertEqual(item['interest_score'], score(listing, settings.INTEREST_PROFILE))
         self.assertIsInstance(item['interest_score'], int)
         self.assertTrue(0 <= item['interest_score'] <= 100)
+
+
+class SignalsTests(TestCase):
+    """Story 3.2 urgency signals: cross-posted / churn-possible / growth-possible."""
+
+    def _listing(self, **overrides):
+        defaults = {
+            'title': 'Job',
+            'company': 'Acme',
+            'url': 'https://example.com/job',
+            'published_at': timezone.now(),
+        }
+        defaults.update(overrides)
+        defaults['dedup_fingerprint'] = compute_fingerprint(
+            defaults['title'], defaults['company'], defaults['url']
+        )
+        return Listing.objects.create(**defaults)
+
+    def test_cross_posted_needs_two_sources(self):
+        zero = self._listing(title='A', seen_sources=[])
+        one = self._listing(title='B', seen_sources=['ouedkniss'])
+        two = self._listing(title='C', seen_sources=['ouedkniss', 'google-jobs'])
+
+        signals = compute_signals([zero, one, two])
+
+        self.assertFalse(signals[zero.id]['cross_posted'])
+        self.assertFalse(signals[one.id]['cross_posted'])
+        self.assertTrue(signals[two.id]['cross_posted'])
+
+    def test_churn_match_and_miss(self):
+        old = self._listing(title='Python Dev', company='Acme', url='https://example.com/job/1')
+        old.delete()
+        fresh = self._listing(title='Python Dev', company='Acme', url='https://example.com/job/2')
+        other = self._listing(title='Python Dev', company='Other', url='https://example.com/job/3')
+        diffhost = self._listing(title='Python Dev', company='Acme', url='https://elsewhere.example/job/4')
+
+        signals = compute_signals([fresh, other, diffhost])
+
+        self.assertTrue(signals[fresh.id]['churn_possible'])
+        self.assertFalse(signals[other.id]['churn_possible'])
+        self.assertFalse(signals[diffhost.id]['churn_possible'])
+
+    def test_churn_same_host_with_url_variants_matches(self):
+        old = self._listing(
+            title='Python Dev', company='Acme',
+            url='https://example.com:8080/jobs/1#apply',
+        )
+        old.delete()
+        fresh = self._listing(
+            title='Python Dev', company='Acme', url='HTTPS://EXAMPLE.com:8080/jobs/2'
+        )
+
+        signals = compute_signals([fresh])
+
+        self.assertTrue(signals[fresh.id]['churn_possible'])
+
+    def test_churn_stale_older_than_window(self):
+        old = self._listing(title='Python Dev', company='Acme', url='https://old.example/job')
+        old.delete()
+        ListingDeletion.objects.update(
+            deleted_at=timezone.now() - timedelta(days=31)
+        )
+        fresh = self._listing(title='Python Dev', company='Acme', url='https://new.example/job')
+
+        signals = compute_signals([fresh])
+
+        self.assertFalse(signals[fresh.id]['churn_possible'])
+
+    def test_churn_normalization_case_and_whitespace(self):
+        old = self._listing(title='Python  Dev', company='Acme ', url='https://EXAMPLE.com/x')
+        old.delete()
+        fresh = self._listing(title='python dev', company='acme', url='HTTPS://example.com/y')
+
+        signals = compute_signals([fresh])
+
+        self.assertTrue(signals[fresh.id]['churn_possible'])
+
+    def test_growth_requires_cluster_of_three_in_seven_days(self):
+        base = timezone.now()
+        self._listing(title='Role 1a', company='GrowthCo2', created_at=base)
+        two_listings = self._listing(title='Target 2', company='GrowthCo2', created_at=base)
+        self._listing(title='Role 3a', company='GrowthCo3', created_at=base)
+        self._listing(title='Role 3b', company='GrowthCo3', created_at=base)
+        three_listings = self._listing(title='Target 3', company='GrowthCo3', created_at=base)
+
+        signals = compute_signals([two_listings, three_listings])
+
+        self.assertFalse(signals[two_listings.id]['growth_possible'])
+        self.assertTrue(signals[three_listings.id]['growth_possible'])
+
+    def test_growth_stale_cluster_beyond_window_false(self):
+        base = timezone.now()
+        stale1 = self._listing(title='Stale 1', company='StaleCo', created_at=base - timedelta(days=8))
+        stale2 = self._listing(title='Stale 2', company='StaleCo', created_at=base - timedelta(days=8))
+        stale3 = self._listing(title='Stale 3', company='StaleCo', created_at=base - timedelta(days=8))
+        stale1.delete()
+        stale2.delete()
+        stale3.delete()
+        target = self._listing(
+            title='Target stale', company='StaleCo',
+            created_at=base - timedelta(days=7, hours=1),
+        )
+
+        signals = compute_signals([target])
+
+        self.assertFalse(signals[target.id]['growth_possible'])
+
+    def test_growth_company_normalization(self):
+        base = timezone.now()
+        self._listing(title='Role 1', company='Acme', created_at=base)
+        self._listing(title='Role 2', company='Acme', created_at=base)
+        target = self._listing(title='Target', company='acme ', created_at=base)
+
+        signals = compute_signals([target])
+
+        self.assertTrue(signals[target.id]['growth_possible'])
+
+    def test_growth_empty_company_false(self):
+        self._listing(title='A', company='', created_at=timezone.now())
+        self._listing(title='B', company='', created_at=timezone.now())
+        target = self._listing(title='C', company='', created_at=timezone.now())
+
+        signals = compute_signals([target])
+
+        self.assertFalse(signals[target.id]['growth_possible'])
+
+    def test_deletion_audit_single_and_bulk(self):
+        one = self._listing(title='One', url='https://example.com/1')
+        two = self._listing(title='Two', url='https://example.com/2')
+        three = self._listing(title='Three', url='https://example.com/3')
+
+        one.delete()
+        Listing.objects.filter(id__in=[two.id, three.id]).delete()
+
+        rows = ListingDeletion.objects.all()
+        self.assertEqual(rows.count(), 3)
+        titles = {r.title for r in rows}
+        self.assertEqual(titles, {'One', 'Two', 'Three'})
+        self.assertTrue(all(r.fingerprint for r in rows))
+
+    def test_payload_signals_shape(self):
+        self._listing(title='Python Dev', seen_sources=['ouedkniss', 'google-jobs'])
+        item = self.client.get(reverse('listings')).json()['data']['items'][0]
+        self.assertEqual(
+            set(item['signals'].keys()),
+            {'cross_posted', 'churn_possible', 'growth_possible'},
+        )
+        self.assertTrue(item['signals']['cross_posted'])
+        self.assertFalse(item['signals']['churn_possible'])
+        self.assertFalse(item['signals']['growth_possible'])
+        self.assertTrue(all(isinstance(v, bool) for v in item['signals'].values()))
+
+    def test_mixed_page_batch_correctness(self):
+        base = timezone.now()
+        old = self._listing(
+            title='Python Dev', company='Acme', url='https://example.com/job/1'
+        )
+        old.delete()
+        churn = self._listing(
+            title='Python Dev', company='Acme', url='https://example.com/job/2'
+        )
+        cross = self._listing(
+            title='Cross', company='CrossCo', seen_sources=['a', 'b'],
+            created_at=base,
+        )
+        self._listing(title='G1', company='GrowthCo', created_at=base)
+        self._listing(title='G2', company='GrowthCo', created_at=base)
+        growth = self._listing(title='G3', company='GrowthCo', created_at=base)
+        plain = self._listing(title='Plain', company='SoloCo', created_at=base)
+
+        signals = compute_signals([churn, cross, growth, plain])
+
+        self.assertTrue(signals[churn.id]['churn_possible'])
+        self.assertFalse(signals[churn.id]['cross_posted'])
+        self.assertFalse(signals[churn.id]['growth_possible'])
+        self.assertTrue(signals[cross.id]['cross_posted'])
+        self.assertFalse(signals[cross.id]['churn_possible'])
+        self.assertFalse(signals[cross.id]['growth_possible'])
+        self.assertTrue(signals[growth.id]['growth_possible'])
+        self.assertFalse(signals[growth.id]['cross_posted'])
+        self.assertFalse(signals[growth.id]['churn_possible'])
+        self.assertEqual(
+            signals[plain.id],
+            {'cross_posted': False, 'churn_possible': False, 'growth_possible': False},
+        )
+
+    def test_payload_signals_per_item_on_multi_item_page(self):
+        self._listing(title='Cross', seen_sources=['a', 'b'])
+        self._listing(title='Plain')
+        items = self.client.get(reverse('listings')).json()['data']['items']
+        self.assertEqual(len(items), 2)
+        by_title = {i['title']: i['signals'] for i in items}
+        self.assertTrue(by_title['Cross']['cross_posted'])
+        self.assertEqual(
+            by_title['Plain'],
+            {'cross_posted': False, 'churn_possible': False, 'growth_possible': False},
+        )

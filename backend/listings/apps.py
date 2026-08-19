@@ -24,3 +24,6 @@ class ListingsConfig(AppConfig):
             set_sqlite_pragmas,
             dispatch_uid='listings_set_sqlite_pragmas',
         )
+        # Story 3.2: deletion audit (importing the module registers the
+        # post_delete receiver; the import guard keeps test re-imports safe).
+        from . import signals  # noqa: F401

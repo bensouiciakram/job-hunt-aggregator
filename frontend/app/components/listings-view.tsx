@@ -14,6 +14,11 @@ export type ListingItem = {
   status: string;
   keywords: string[];
   interest_score: number;
+  signals: {
+    cross_posted: boolean;
+    churn_possible: boolean;
+    growth_possible: boolean;
+  };
 };
 
 type Props = {
@@ -59,7 +64,7 @@ export default function ListingsView({ initialItems, bucket, keyword, page }: Pr
           ? item.url
           : undefined;
         return (
-          <li key={item.id} className="py-5">
+          <li key={item.id} className="py-5" data-row="listing">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="break-words text-lg font-medium">{item.title}</h2>
               <ScoreChip score={item.interest_score} />
@@ -68,6 +73,7 @@ export default function ListingsView({ initialItems, bucket, keyword, page }: Pr
                   {item.source.name}
                 </span>
               )}
+              <SignalChips signals={item.signals} />
             </div>
             <p className="mt-1 break-words text-sm text-zinc-600 dark:text-zinc-400">
               {item.company} · {formatRelative(item.published_at)}
@@ -115,6 +121,33 @@ function ScoreChip({ score }: { score: number }) {
     >
       {score}
     </span>
+  );
+}
+
+function SignalChips({
+  signals,
+}: {
+  signals: ListingItem["signals"];
+}) {
+  const labels: [keyof ListingItem["signals"], string][] = [
+    ["cross_posted", "cross-posted"],
+    ["churn_possible", "churn?"],
+    ["growth_possible", "growth?"],
+  ];
+  return (
+    <>
+      {labels.map(([key, label]) =>
+        signals[key] ? (
+          <span
+            key={key}
+            data-signal={key}
+            className="rounded-full border border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400"
+          >
+            {label}
+          </span>
+        ) : null,
+      )}
+    </>
   );
 }
 

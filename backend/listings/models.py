@@ -103,3 +103,24 @@ class Application(models.Model):
 
     def __str__(self):
         return f'application({self.listing_id})'
+
+
+class ListingDeletion(models.Model):
+    """Append-only audit of Listing deletions (Story 3.2, AD-8 engine history).
+
+    Written by the post_delete signal (listings/signals.py) so every deletion
+    path — admin, shell, future flows — leaves a trail the churn signal reads.
+    Rows are never edited or deleted.
+    """
+
+    fingerprint = models.CharField(max_length=64)
+    title = models.CharField(max_length=500)
+    company = models.CharField(max_length=255)
+    url = models.CharField(max_length=2048)
+    deleted_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-deleted_at']
+
+    def __str__(self):
+        return f'deleted({self.fingerprint})'
