@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import ApplyButton from "./apply-button";
+import ApplyButton, { type OutcomeValue } from "./apply-button";
 
 export type ListingItem = {
   id: number;
@@ -30,6 +30,7 @@ type Props = {
 
 export default function ListingsView({ initialItems, bucket, keyword, page }: Props) {
   const [items, setItems] = useState(initialItems);
+  const [outcomes, setOutcomes] = useState<Record<number, string>>({});
 
   function onApplied(listingId: number) {
     setItems((current) =>
@@ -39,6 +40,10 @@ export default function ListingsView({ initialItems, bucket, keyword, page }: Pr
             item.id === listingId ? { ...item, status: "applied" } : item,
           ),
     );
+  }
+
+  function onOutcome(listingId: number, outcome: OutcomeValue) {
+    setOutcomes((current) => ({ ...current, [listingId]: outcome }));
   }
 
   const emptyCopy = keyword
@@ -96,7 +101,9 @@ export default function ListingsView({ initialItems, bucket, keyword, page }: Pr
               <ApplyButton
                 listingId={item.id}
                 applied={item.status === "applied"}
+                outcome={outcomes[item.id] ?? null}
                 onApplied={onApplied}
+                onOutcome={onOutcome}
               />
             </div>
           </li>

@@ -16,9 +16,11 @@ from django.utils import timezone
 from collector.adapters.google_jobs import GoogleJobsAdapter
 from collector.pipeline import compute_fingerprint
 from collector.registry import clear, get_adapter, register
+from judge.pacing import compute_pacing, source_weights
 from judge.scoring import score, score_text
 from judge.signals import compute_signals
-from listings.models import FetchLog, Listing, ListingDeletion, Source
+from listings.models import Application, FetchLog, Listing, ListingDeletion, Source
+from listings.services import apply_to_listing, set_outcome
 
 
 class StubApiAdapter:
@@ -439,7 +441,8 @@ class ListingsApiTests(ApiTestCase):
         self.assertEqual(set(payload.keys()), {'ok', 'data', 'error'})
         data = payload['data']
         self.assertEqual(
-            set(data.keys()), {'items', 'page', 'has_next', 'total', 'last_sweep_at'}
+            set(data.keys()),
+            {'items', 'page', 'has_next', 'total', 'last_sweep_at', 'pacing'},
         )
         self.assertEqual(data['page'], 1)
         self.assertEqual(len(data['items']), 25)
@@ -1236,3 +1239,200 @@ class SignalsTests(TestCase):
             by_title['Plain'],
             {'cross_posted': False, 'churn_possible': False, 'growth_possible': False},
         )
+
+
+class OutcomeApiTests(TestCase):
+    """Story 3.3 outcome entry (FR-8): endpoint matrix + AD-5 no-create."""
+
+    _next_url = 0
+
+    def _listing(self, **overrides):
+        OutcomeApiTests._next_url += 1
+        defaults = {
+            'title': f'Job {OutcomeApiTests._next_url}',
+            'company': 'Acme',
+            'url': f'https://example.com/job/{OutcomeApiTests._next_url}',
+            'published_at': timezone.now(),
+        }
+        defaults.update(overrides)
+        defaults['dedup_fingerprint'] = compute_fingerprint(
+            defaults['title'], defaults['company'], defaults['url']
+        )
+        return Listing.objects.create(**defaults)
+
+    def _apply(self, listing):
+        apply_to_listing(listing)
+        return Application.objects.get(listing=listing)
+
+    def _post_outcome(self, listing, outcome):
+        return self.client.post(
+            reverse('listing-outcome', args=[listing.pk]),
+            data=json.dumps({'outcome': outcome}),
+            content_type='application/json',
+        )
+
+    def test_response_interview_silence_set_outcome(self):
+        listing = self._listing()
+        self._apply(listing)
+        for outcome in ('response', 'interview', 'silence'):
+            response = self._post_outcome(listing, outcome)
+            self.assertEqual(response.status_code, 200)
+            body = response.json()
+            self.assertTrue(body['ok'])
+            self.assertEqual(body['data']['application']['outcome'], outcome)
+            self.assertEqual(body['data']['status'], 'applied')
+            self.assertEqual(
+                Application.objects.get(listing=listing).outcome, outcome
+            )
+            listing.refresh_from_db()
+            self.assertEqual(listing.status, 'applied')
+
+    def test_clear_outcome_with_empty_string(self):
+        listing = self._listing()
+        self._apply(listing)
+        self._post_outcome(listing, 'response')
+        response = self._post_outcome(listing, '')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()['data']['application']['outcome'])
+        self.assertIsNone(Application.objects.get(listing=listing).outcome)
+
+    def test_outcome_never_creates_application(self):
+        listing = self._listing()
+        response = self._post_outcome(listing, 'response')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()['ok'])
+        self.assertIn('not applied', response.json()['error'])
+        self.assertEqual(Application.objects.filter(listing=listing).count(), 0)
+
+    def test_outcome_unknown_listing_404(self):
+        listing = self._listing()
+        pk = listing.pk
+        listing.delete()
+        response = self.client.post(
+            reverse('listing-outcome', args=[pk]),
+            data=json.dumps({'outcome': 'response'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(response.json()['ok'])
+
+    def test_outcome_unknown_listing_overflow_pk_404(self):
+        response = self.client.post(
+            reverse('listing-outcome', args=[10**20]),
+            data=json.dumps({'outcome': 'response'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_outcome_invalid_value_422(self):
+        listing = self._listing()
+        self._apply(listing)
+        response = self._post_outcome(listing, 'maybe')
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(response.json()['ok'])
+        self.assertIsNone(Application.objects.get(listing=listing).outcome)
+
+    def test_outcome_repeat_idempotent(self):
+        listing = self._listing()
+        self._apply(listing)
+        for _ in range(2):
+            response = self._post_outcome(listing, 'interview')
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual(Application.objects.count(), 1)
+        self.assertEqual(Application.objects.get(listing=listing).outcome, 'interview')
+
+    def test_outcome_method_not_allowed(self):
+        listing = self._listing()
+        response = self.client.get(reverse('listing-outcome', args=[listing.pk]))
+        self.assertEqual(response.status_code, 405)
+
+    def test_outcome_invalid_json_body(self):
+        listing = self._listing()
+        self._apply(listing)
+        response = self.client.post(
+            reverse('listing-outcome', args=[listing.pk]),
+            data='not json',
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_pacing_payload_shape(self):
+        self._listing(title='Pace Job')
+        data = self.client.get(reverse('listings')).json()['data']
+        self.assertEqual(
+            set(data['pacing'].keys()), {'applied_7d', 'rest', 'source_weights'}
+        )
+        self.assertIsInstance(data['pacing']['applied_7d'], int)
+        self.assertIsInstance(data['pacing']['rest'], bool)
+        self.assertIsInstance(data['pacing']['source_weights'], dict)
+
+
+class PacingTests(TestCase):
+    """Story 3.3 pacing math: weights, 7-day count, rest threshold."""
+
+    _next_url = 0
+
+    def _listing(self, source=None, **overrides):
+        PacingTests._next_url += 1
+        defaults = {
+            'title': f'Job {PacingTests._next_url}',
+            'company': 'Acme',
+            'url': f'https://example.com/job/{PacingTests._next_url}',
+            'published_at': timezone.now(),
+        }
+        defaults.update(overrides)
+        defaults['dedup_fingerprint'] = compute_fingerprint(
+            defaults['title'], defaults['company'], defaults['url']
+        )
+        return Listing.objects.create(source=source, **defaults)
+
+    def _application(self, listing, outcome, days_ago=0):
+        app = Application.objects.create(listing=listing, outcome=outcome)
+        Application.objects.filter(pk=app.pk).update(
+            created_at=timezone.now() - timedelta(days=days_ago)
+        )
+        return app
+
+    def test_weight_responder_vs_silent_vs_neutral(self):
+        responder_source = Source.objects.create(name='responder', adapter_key='stub')
+        silent_source = Source.objects.create(name='silent', adapter_key='stub')
+        neutral_source = Source.objects.create(name='neutral', adapter_key='stub')
+        self._application(self._listing(source=responder_source), 'response', 1)
+        self._application(self._listing(source=responder_source), 'silence', 1)
+        self._application(self._listing(source=silent_source), 'silence', 1)
+
+        weights = source_weights()
+
+        self.assertEqual(weights[responder_source.id], 0.5 + 2 / 4)
+        self.assertEqual(weights[silent_source.id], round(0.5 + 1 / 3, 2))
+        self.assertNotIn(neutral_source.id, weights)
+
+    def test_weight_ignores_outcomes_outside_window(self):
+        source = Source.objects.create(name='old', adapter_key='stub')
+        self._application(self._listing(source=source), 'response', 31)
+        self.assertEqual(source_weights(), {})
+
+    def test_weight_skips_sourceless_applications(self):
+        self._application(self._listing(source=None), 'response', 1)
+        self.assertEqual(source_weights(), {})
+
+    def test_applied_7d_counts_and_boundary(self):
+        base = timezone.now()
+        in_window = self._listing(title='In')
+        self._application(in_window, None, 0)
+        self._application(self._listing(title='Old'), None, 8)
+
+        pacing = compute_pacing(base + timedelta(hours=1))
+
+        self.assertEqual(pacing['applied_7d'], 1)
+        self.assertFalse(pacing['rest'])
+
+    def test_rest_threshold_nine_vs_ten(self):
+        listings = [self._listing(title=f'L{i}') for i in range(9)]
+        for listing in listings:
+            self._application(listing, None, 0)
+        self.assertFalse(compute_pacing()['rest'])
+        self._application(self._listing(title='L10'), None, 0)
+        pacing = compute_pacing()
+        self.assertTrue(pacing['rest'])
+        self.assertEqual(pacing['applied_7d'], 10)

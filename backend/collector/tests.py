@@ -70,7 +70,8 @@ from .worker import (
     poll_all,
     run,
 )
-from listings.models import FetchLog, Listing, Source
+from listings.models import Application, FetchLog, Listing, Source
+from listings.services import apply_to_listing, set_outcome
 
 HTML_WITH_JOBS = (
     '<html><body>'
@@ -1103,6 +1104,61 @@ class WorkerTests(TestCase):
         Source.objects.all().delete()
         poll_all()
         self.assertEqual(FetchLog.objects.filter(stage='pass', ok=True).count(), 1)
+
+    def test_poll_all_collects_sources_weight_descending(self):
+        # Story 3.3 (FR-8): collection order follows pacing's response-rate
+        # weights — responders first, neutrals (1.0) in stable order, then
+        # low-responding sources. Every source still runs (nudge, not gate).
+        order = []
+
+        def make_recording_stub(key, tag):
+            @register(key)
+            class RecordingStubAdapter:
+                def __init__(self, config=None):
+                    self.config = config or {}
+
+                def fetch(self, keywords):
+                    order.append(tag)
+                    return []
+
+                def parse(self, raw_items):
+                    return []
+
+            return RecordingStubAdapter
+
+        make_recording_stub('order-low', 'low')
+        make_recording_stub('order-high', 'high')
+        make_recording_stub('order-neutral', 'neutral')
+
+        Source.objects.all().delete()
+        low = Source.objects.create(
+            name='low', adapter_key='order-low', config={'keywords': ['python']}
+        )
+        high = Source.objects.create(
+            name='high', adapter_key='order-high', config={'keywords': ['python']}
+        )
+        Source.objects.create(
+            name='neutral', adapter_key='order-neutral', config={'keywords': ['python']}
+        )
+
+        def applied_listing(source, outcome):
+            listing = Listing.objects.create(
+                dedup_fingerprint=compute_fingerprint('Job', 'Co', f'https://{source.name}.example'),
+                title='Job',
+                company='Co',
+                url=f'https://{source.name}.example/job',
+                published_at=timezone.now(),
+                source=source,
+            )
+            apply_to_listing(listing)
+            set_outcome(listing, outcome)
+
+        applied_listing(low, 'silence')
+        applied_listing(high, 'response')
+
+        poll_all()
+
+        self.assertEqual(order, ['high', 'neutral', 'low'])
 
     def test_last_pass_at_none_until_ok_pass_exists(self):
         self.assertIsNone(last_pass_at())

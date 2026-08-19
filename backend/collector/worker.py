@@ -26,6 +26,10 @@ from django.utils import timezone
 from .collect import collect_source
 from listings.models import FetchLog, Listing, Source
 
+# Story 3.3 (FR-8): collection order consults pacing's per-source response
+# weights; the frozen pipeline files stay untouched.
+from judge.pacing import source_weights
+
 # AD-7 freshness marker: a Listing is fresh while published_at is within
 # this window; older rows are "stale" and counted at backfill.
 STALE_AFTER_HOURS = 24
@@ -83,8 +87,19 @@ def poll_all():
     writes a stage='backfill' FetchLog (ok=True) whose error field
     carries the count of stale Listings (published_at older than 24h)
     found at backfill, e.g. "3 listing(s) older than 24h".
+
+    Order (Story 3.3, FR-8): Sources are collected weight-descending —
+    responding sources first, per pacing's Laplace-smoothed response
+    rate; sources without recent outcomes stay neutral (1.0). Order is
+    a nudge, never a gate: every source still runs each cycle.
     """
-    for source in Source.objects.all():
+    weights = source_weights()
+    sources = sorted(
+        Source.objects.all(),
+        key=lambda s: weights.get(s.id, 1.0),
+        reverse=True,
+    )
+    for source in sources:
         collect_source(source)
     _log_cycle('pass')
 

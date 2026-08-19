@@ -21,3 +21,24 @@ export async function applyToListing(
   }
   return { ok: true };
 }
+
+export async function setOutcome(
+  listingId: number,
+  outcome: "response" | "interview" | "silence" | "",
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/api/listings/${listingId}/outcome/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outcome }),
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, error: "Could not reach the backend." };
+  }
+  if (!response.ok) {
+    return { ok: false, error: `The API responded with HTTP ${response.status}` };
+  }
+  return { ok: true };
+}

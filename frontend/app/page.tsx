@@ -11,6 +11,11 @@ type ListingsData = {
   has_next: boolean;
   total: number;
   last_sweep_at: string | null;
+  pacing: {
+    applied_7d: number;
+    rest: boolean;
+    source_weights: Record<string, number>;
+  };
 };
 
 type ListingsResponse =
@@ -89,6 +94,15 @@ export default async function HomePage(props: {
             Last sweep: {data ? formatRelative(data.last_sweep_at) : "never"} <RefreshButton />
           </p>
         </header>
+
+        {data?.pacing.rest && (
+          <p
+            data-pacing-rest
+            className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+          >
+            10 great matches applied this week — rest
+          </p>
+        )}
 
         <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-4">

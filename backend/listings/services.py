@@ -11,6 +11,12 @@ from .models import Application, Listing
 
 APPLIED = Listing.Status.APPLIED
 
+VALID_OUTCOMES = {choice for choice, _ in Application.Outcome.choices}
+
+
+class OutcomeError(ValueError):
+    """Raised for outcomes the service refuses (AD-4 contract)."""
+
 
 @transaction.atomic
 def apply_to_listing(listing):
@@ -32,3 +38,23 @@ def apply_to_listing(listing):
         listing.status = APPLIED
         listing.save(update_fields=['status'])
     return application, created
+
+
+@transaction.atomic
+def set_outcome(listing, outcome):
+    """Record an outcome on the existing Application (FR-8, AD-5).
+
+    Never creates Application rows: without an Application this raises
+    OutcomeError. `outcome` must be 'response', 'interview', 'silence',
+    or ''/None (clear); anything else raises OutcomeError. The Listing
+    status is never touched (AD-4).
+    """
+    if outcome not in (None, '') and outcome not in VALID_OUTCOMES:
+        raise OutcomeError(f'invalid outcome: {outcome!r}')
+    try:
+        application = Application.objects.get(listing=listing)
+    except Application.DoesNotExist:
+        raise OutcomeError('not applied yet')
+    application.outcome = outcome or None
+    application.save(update_fields=['outcome'])
+    return application

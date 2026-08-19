@@ -21,9 +21,10 @@ from collector.ports import AdapterNotFound
 from collector.registry import get_adapter
 from collector.test_fetch import TestFetchError, run_test_fetch
 from judge.scoring import score as score_listing
+from judge.pacing import compute_pacing
 from judge.signals import compute_signals
 from listings.models import FetchLog, Listing, Source
-from listings.services import apply_to_listing
+from listings.services import OutcomeError, apply_to_listing, set_outcome
 
 
 def _ok(data, status=200):
@@ -212,6 +213,41 @@ def apply(request, pk):
 
 
 @csrf_exempt
+def outcome(request, pk):
+    """POST /api/listings/<pk>/outcome/ — record response/interview/silence (FR-8).
+
+    Outcome entry never creates Application rows (AD-5): without an
+    existing Application the request fails 400. Values are validated by
+    the service (invalid → 422). Mirrors the apply endpoint's response
+    shape; the listing status is never touched (AD-4).
+    """
+    if request.method != 'POST':
+        return _err('method not allowed', status=405)
+    try:
+        payload = json.loads(request.body or b'{}')
+    except json.JSONDecodeError:
+        return _err('invalid JSON body')
+    if not isinstance(payload, dict):
+        return _err('request body must be a JSON object')
+    outcome = payload.get('outcome')
+    try:
+        listing = Listing.objects.select_related('source').get(pk=pk)
+    except (Listing.DoesNotExist, OverflowError):
+        return _err('listing not found', status=404)
+    try:
+        application = set_outcome(listing, outcome)
+    except OutcomeError as exc:
+        if str(exc) == 'not applied yet':
+            return _err(str(exc), status=400)
+        return _err(str(exc), status=422)
+    data = {
+        'application': _application_payload(application),
+        'status': listing.status,
+    }
+    return JsonResponse({'ok': True, 'data': data, 'error': None}, status=200)
+
+
+@csrf_exempt
 def listings(request):
     """GET /api/listings/ — AD-9 paged list, AD-10 envelope.
 
@@ -265,6 +301,7 @@ def listings(request):
         'has_next': start + PER_PAGE < total,
         'total': total,
         'last_sweep_at': _last_sweep_at(),
+        'pacing': compute_pacing(),
     }
     return JsonResponse(
         {'ok': True, 'data': data, 'error': None}, status=200

@@ -88,6 +88,11 @@ class Application(models.Model):
     is the only writer (AD-4).
     """
 
+    class Outcome(models.TextChoices):
+        RESPONSE = 'response', 'Response'
+        INTERVIEW = 'interview', 'Interview'
+        SILENCE = 'silence', 'Silence'
+
     listing = models.OneToOneField(
         Listing,
         on_delete=models.CASCADE,
@@ -96,7 +101,12 @@ class Application(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     # Nullable in v1 (FR-8); Epic 3 owns the choices (response/interview/silence).
-    outcome = models.CharField(max_length=20, null=True, blank=True)
+    outcome = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        choices=Outcome.choices,
+    )
 
     class Meta:
         ordering = ['-created_at']
