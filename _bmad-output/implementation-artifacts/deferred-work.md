@@ -50,3 +50,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-6-google-jobs-adapter.md`
   summary: jobspy's google path sorts the mixed date/None `date_posted` column — a TypeError from comparing `datetime.date` with `None` wraps into a labelled fetch failure; unexercised since the probe returned empty; monitor via future probes.
   evidence: Story 1.6 patch review — the fixture is date-only (no None cells), so mixed-type sorting is untested; revisit when a real scrape returns mixed date_posted values.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-facebook-groups-adapter.md`
+  summary: FB relative-date parsing — `published_at` is always None logged-out (Facebook renders relative dates like "2 h"/"hier", not parseable ISO); parsing them into dates is a future pipeline enhancement.
+  evidence: Story 1.7 implementation — the approved spec freezes published_at=None for the logged-out path; the lenient pipeline stores None; deferred deliberately.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-facebook-groups-adapter.md`
+  summary: Private-group manual login — logged-out browsing only today; a `user-data-dir` persistent-context option (one-time manual login in a headed browser) is a future option for private groups.
+  evidence: Story 1.7 implementation — login walls raise the labelled 'login required' error by design; the adapter contains no credentials/login code; out of scope per the approved spec.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-facebook-groups-adapter.md`
+  summary: FB message-node pinning (`[data-ad-preview="message"]`) and comment-article exclusion are the next drift-maintenance triggers for feed extraction — the fixture's nested-comment decoy documents that comment bodies must not pollute post text, and card-level comment exclusion currently rides on the no-permalink rule and the (netloc, path) dedupe identity.
+  evidence: Story 1.7 review loopback — extraction keys on div[dir="auto"] text blocks inside div[role="article"] cards; the review's fixture decoys (nested comment article, sidebar article) are the drift canaries for these two selectors; relative-date parsing and private-group login entries above already exist.

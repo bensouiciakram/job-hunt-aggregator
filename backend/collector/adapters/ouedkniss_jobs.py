@@ -90,6 +90,12 @@ class OuedknissAdapterError(Exception):
 class OuedknissJobsAdapter(SourcePort):
     """Fetch ouedkniss jobs postings via the site's own GraphQL endpoint."""
 
+    def __init__(self, config=None):
+        # Config channel (Story 1.7 review loopback, ratified): every
+        # adapter constructor takes the optional dict; ouedkniss has no
+        # per-source options yet, so config is accepted-but-unused.
+        pass
+
     def fetch(self, keywords: list[str]) -> list[dict]:
         """One SearchQuery per keyword (q=<keyword>), id-deduped, capped.
 

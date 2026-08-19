@@ -80,7 +80,9 @@ def _collect(source, state):
 
     state['stage'] = 'fetch'
     try:
-        adapter = get_adapter(source.adapter_key)()
+        adapter = get_adapter(source.adapter_key)(
+            config=source.config if isinstance(source.config, dict) else None
+        )
         raw = adapter.fetch(keywords)
         if raw is None:
             raise TypeError('adapter.fetch returned None')

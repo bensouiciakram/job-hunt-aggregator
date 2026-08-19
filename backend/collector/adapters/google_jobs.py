@@ -48,9 +48,9 @@ scrape_jobs = None
 
 # Hard sample cap: same convention as collector/test_fetch.py.
 MAX_SAMPLE = 50
-# Site search defaults. The frozen pipeline instantiates adapters without
-# config, so these are the adapter-level defaults a future config channel
-# would override.
+# Site search defaults. The config channel (Story 1.7 review loopback,
+# ratified) passes Source.config to every adapter constructor; these are
+# the defaults used when the channel is absent or the keys are missing.
 DEFAULT_LOCATION = 'Algeria'
 DEFAULT_HOURS_OLD = 24
 

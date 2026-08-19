@@ -12,6 +12,7 @@ Django 6.1 project under `backend/`, Python 3.13, SQLite (WAL + busy_timeout).
 uv python install 3.13        # one-time, user-local
 uv venv --python 3.13         # creates .venv
 uv pip install -r requirements.txt
+uv run playwright install chromium   # one-time, ~150MB (facebook-groups adapter)
 ```
 
 ## Run
@@ -70,3 +71,13 @@ uv run python manage.py run_collector   # collector worker (separate process)
   `requirements.txt`; requests-based Google Jobs scraper, no API key).
   JobSpy reverse-engineers Google's endpoints, so Google may block or
   rate-limit — failures surface as `fetch` FetchLogs and stale counts.
+- `facebook-groups` — Playwright (headless chromium, sync API) adapter
+  for logged-out **public** Facebook groups (Story 1.7; `playwright`
+  pinned in `requirements.txt`). The browser binary is a one-time
+  download (`uv run playwright install chromium`, ~150MB). Requires
+  `config['groups']` (list of public group URLs); private/gated groups
+  raise a labelled 'login required' fetch failure. Facebook ships DOM
+  changes weekly — the pinned selectors and the test fixture
+  (`collector/tests/fixtures/facebook_feed.html`) are the drift
+  maintenance points. The test suite is hermetic (fake page objects) and
+  never launches the browser.

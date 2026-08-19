@@ -1,0 +1,67 @@
+<!--
+  facebook_feed.html — Story 1.7 fixture: logged-out Facebook group feed
+  DOM matching the pinned selector set in
+  collector/adapters/facebook_groups.py, documented as of 2026-08-19.
+
+  Drift-maintenance point: when the live Facebook DOM changes, update
+  BOTH this fixture and the pinned selectors (they must stay in sync;
+  FacebookGroupsAdapterTests parses this fixture through the selectors).
+
+  Per-card structure:
+    div[data-pagelet="GroupFeed"] div[role="article"]
+      h2 > span              -> author (AUTHOR_SELECTOR)
+      div[dir="auto"]        -> post text (POST_TEXT_SELECTOR, ALL blocks;
+                                a multi-paragraph post renders several)
+      a[href^="/groups/"]    -> permalink (PERMALINK_SELECTOR)
+
+  Decoys (review loopback 2026-08-19):
+    - a nested COMMENT article inside card 1: it matches the bare card
+      selector (and even the scoped descendant selector) but carries NO
+      permalink, so extraction skips it; its body is a plain div (not
+      dir="auto") so it never pollutes the parent card's post text —
+      message-node pinning ([data-ad-preview="message"]) and comment
+      exclusion are the documented next drift triggers;
+    - a SIDEBAR/suggested-group article OUTSIDE the feed container: it
+      HAS a permalink, so only the scoped extraction selector (feed
+      container + card) excludes it.
+
+  URL variants pin the (netloc, path) dedupe identity: card 1's permalink
+  has a trailing slash, card 2's carries a ?comment_id= query — both are
+  emitted as-is, and a comment_id variant of the same post path collapses
+  onto the post.
+
+  Cards: (1) matches keyword "développeur" (trailing-slash permalink,
+  nested comment decoy), (2) multi-paragraph, no keyword match (query
+  variant), (3) no keyword match.
+-->
+<html>
+<body>
+<div data-pagelet="GroupFeed">
+  <div role="article">
+    <h2><span>Karim Benali</span></h2>
+    <div dir="auto">Urgent recrutement développeur web à Alger, CDI temps plein.</div>
+    <div role="article">
+      <h2><span>Sami Larbi</span></h2>
+      <div class="comment-body">Intéressé, comment postuler ?</div>
+    </div>
+    <a href="/groups/1248610773920835/posts/101/" aria-label="View post">View post</a>
+  </div>
+  <div role="article">
+    <h2><span>SARL Tech Algérie</span></h2>
+    <div dir="auto">Vente voiture Peugeot 208 essence, très bon état.</div>
+    <div dir="auto">Prix négociable, visite possible à Alger.</div>
+    <a href="/groups/1248610773920835/posts/102?comment_id=987654321" aria-label="View post">View post</a>
+  </div>
+  <div role="article">
+    <h2><span>Amine Meziane</span></h2>
+    <div dir="auto">Location appartement 3 pièces à Oran, meublé, disponible immédiatement.</div>
+    <a href="/groups/1248610773920835/posts/103" aria-label="View post">View post</a>
+  </div>
+</div>
+<div role="article">
+  <h2><span>Groupe Tech Alger</span></h2>
+  <div dir="auto">Rejoignez ce groupe pour les offres d emploi à Alger et ailleurs.</div>
+  <a href="/groups/9999999999999999/posts/1" aria-label="View post">View post</a>
+</div>
+</body>
+</html>

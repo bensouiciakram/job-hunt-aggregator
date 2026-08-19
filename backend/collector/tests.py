@@ -12,9 +12,11 @@ import types
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.parse import urljoin, urlsplit
 
 import numpy as np
 import pandas as pd
+import parsel
 import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 from django.conf import settings
@@ -22,6 +24,17 @@ from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
+from .adapters.facebook_groups import (
+    AUTHOR_SELECTOR,
+    BASE_URL,
+    FEED_CONTAINER_SELECTOR,
+    FacebookGroupsAdapter,
+    FacebookGroupsAdapterError,
+    LOGIN_WALL_SELECTOR,
+    PERMALINK_SELECTOR,
+    POST_CARD_SELECTOR,
+    POST_TEXT_SELECTOR,
+)
 from .adapters.google_jobs import (
     DEFAULT_HOURS_OLD,
     GoogleJobsAdapter,
@@ -378,6 +391,9 @@ def register_stub(key='stub-collect', raw_items=None, fetch_error=None):
 
     @register(key)
     class StubCollectAdapter:
+        def __init__(self, config=None):
+            pass
+
         def fetch(self, keywords):
             if fetch_error is not None:
                 raise fetch_error
@@ -715,6 +731,9 @@ class CollectSourceTests(TestCase):
 
         @register('capture-keywords')
         class CaptureAdapter:
+            def __init__(self, config=None):
+                pass
+
             def fetch(self, keywords):
                 received.append(keywords)
                 return []
@@ -791,6 +810,9 @@ class CollectSourceTests(TestCase):
             with self.subTest(bad_output=bad_output):
                 @register('bad-fetch')
                 class BadFetchAdapter:
+                    def __init__(self, config=None):
+                        pass
+
                     def fetch(self, keywords):
                         return bad_output
 
@@ -807,6 +829,9 @@ class CollectSourceTests(TestCase):
     def test_parse_raises_logged_stage_parse(self):
         @register('parse-boom')
         class ParseBoomAdapter:
+            def __init__(self, config=None):
+                pass
+
             def fetch(self, keywords):
                 return [{'title': 'X', 'company': 'Y', 'url': 'https://x.example/'}]
 
@@ -985,6 +1010,9 @@ def register_empty_stub(key):
 
     @register(key)
     class EmptyStubAdapter:
+        def __init__(self, config=None):
+            pass
+
         def fetch(self, keywords):
             return []
 
@@ -2046,3 +2074,857 @@ class GoogleJobsFullStackTests(TestCase):
         self.assertEqual(listing.source, source)
         self.assertEqual(listing.seen_sources, ['google-jobs'])
         self.assertEqual(listing.status, 'new')
+
+
+# ---------------------------------------------------------------------------
+# Story 1.7: facebook-groups adapter (Playwright)
+# ---------------------------------------------------------------------------
+
+GROUP_1 = 'https://www.facebook.com/groups/1248610773920835'
+GROUP_2 = 'https://www.facebook.com/groups/9876543210987654'
+
+FACEBOOK_FIXTURE = (
+    Path(__file__).parent / 'tests' / 'fixtures' / 'facebook_feed.html'
+).read_text(encoding='utf-8')
+# The scoped extraction selector (review loopback, F6): post cards are
+# queried INSIDE the feed container so sidebar/suggested-group articles
+# OUTSIDE the pagelet are never extracted.
+FACEBOOK_CARD_SELECTOR = f'{FEED_CONTAINER_SELECTOR} {POST_CARD_SELECTOR}'
+
+
+def _fake_card_from_node(node):
+    """One fake card element from a parsel node (pinned selectors).
+
+    Playwright semantics: a dir="auto" block's text nodes are joined
+    with '\n' inside inner_text; a card with several blocks stores them
+    as a list under POST_TEXT_SELECTOR so the adapter's all-blocks loop
+    sees every paragraph (review loopback, F12).
+    """
+    children = {}
+    text_hits = node.css(POST_TEXT_SELECTOR)
+    if text_hits:
+        children[POST_TEXT_SELECTOR] = [
+            _FakeElement(text='\n'.join(hit.css('::text').getall()))
+            for hit in text_hits
+        ]
+    author_hit = node.css(AUTHOR_SELECTOR)
+    if author_hit:
+        children[AUTHOR_SELECTOR] = _FakeElement(
+            text='\n'.join(author_hit[0].css('::text').getall())
+        )
+    link_hit = node.css(PERMALINK_SELECTOR)
+    if link_hit:
+        children[PERMALINK_SELECTOR] = _FakeElement(
+            attrs={'href': link_hit[0].attrib.get('href', '')}
+        )
+    return _FakeElement(children=children)
+
+
+def _fixture_fake_cards():
+    """Fixture cards through the SCOPED selector, exactly like the adapter."""
+    doc = parsel.Selector(text=FACEBOOK_FIXTURE)
+    return [
+        _fake_card_from_node(node)
+        for node in doc.css(FACEBOOK_CARD_SELECTOR)
+    ]
+
+
+class _FakeElement:
+    """Minimal playwright element handle: children keyed by selector,
+    plus get_attribute/inner_text (the subset the adapter drives).
+
+    query_selector_all returns the stored list (several dir="auto"
+    blocks) or a single element wrapped in a list — the adapter's text
+    loop joins each block's inner_text with '\n'.
+    """
+
+    def __init__(self, children=None, attrs=None, text=''):
+        self._children = children or {}
+        self._attrs = attrs or {}
+        self._text = text
+
+    def query_selector(self, selector):
+        found = self._children.get(selector)
+        if isinstance(found, list):
+            return found[0] if found else None
+        return found
+
+    def query_selector_all(self, selector):
+        found = self._children.get(selector)
+        if found is None:
+            return []
+        return found if isinstance(found, list) else [found]
+
+    def get_attribute(self, name):
+        return self._attrs.get(name)
+
+    def inner_text(self):
+        return self._text
+
+
+class _FakePage:
+    """Playwright Page subset the adapter drives, scripted per scenario:
+    rendered feed, login wall (marker and/or redirect URL), wall that
+    appears only after load, navigation/wait timeouts, zero-post feed,
+    cards missing permalink/author, close failures.
+
+    Fidelity (review loopback, F12): wait_for_selector asserts that the
+    feed wait targets the pinned feed-container selector, so extraction
+    drift fails loudly instead of passing silently; the wall marker is
+    scripted per probe via `wall_probes` (wall-after-load scenarios).
+    """
+
+    def __init__(self, cards=None, wall=False, url='', goto_error=None,
+                 wait_error=None, gotos=None, wall_probes=None,
+                 close_error=None):
+        self.cards = list(cards or [])
+        self.wall = wall
+        self.url = url
+        self.goto_error = goto_error
+        self.wait_error = wait_error
+        self.gotos = gotos
+        self.wall_probes = list(wall_probes) if wall_probes is not None else None
+        self.close_error = close_error
+        self.closed = False
+        self.feed_waits = 0
+
+    def goto(self, url, timeout=None):
+        if self.gotos is not None:
+            self.gotos.append(url)
+        if self.goto_error is not None:
+            raise self.goto_error
+
+    def _wall_marker_present(self):
+        if self.wall_probes is not None:
+            if self.wall_probes:
+                return self.wall_probes.pop(0)
+            return self.wall
+        return self.wall
+
+    def wait_for_selector(self, selector, timeout=None, state=None):
+        if selector == LOGIN_WALL_SELECTOR:
+            if self._wall_marker_present():
+                return _FakeElement()
+            raise TimeoutError(f'Timeout {timeout}ms exceeded')
+        assert selector == FEED_CONTAINER_SELECTOR
+        self.feed_waits += 1
+        if self.wait_error is not None:
+            raise self.wait_error
+        return _FakeElement()
+
+    def query_selector(self, selector):
+        if self.wall and selector == LOGIN_WALL_SELECTOR:
+            return _FakeElement()
+        return None
+
+    def query_selector_all(self, selector):
+        if selector == FACEBOOK_CARD_SELECTOR:
+            return list(self.cards)
+        return []
+
+    def close(self):
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _FakeContext:
+    """Hands out one scripted page per group visit; records closes."""
+
+    def __init__(self, pages=None, new_page_error=None, close_error=None):
+        self.pages = list(pages or [])
+        self.new_page_error = new_page_error
+        self.close_error = close_error
+        self.closed = False
+
+    def new_page(self):
+        if self.new_page_error is not None:
+            raise self.new_page_error
+        return self.pages.pop(0)
+
+    def close(self):
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _FakeBrowser:
+    def __init__(self, context=None, launch_error=None, context_error=None,
+                 close_error=None):
+        self.context = context or _FakeContext()
+        self.launch_error = launch_error
+        self.context_error = context_error
+        self.close_error = close_error
+        self.closed = False
+
+    def new_context(self):
+        if self.context_error is not None:
+            raise self.context_error
+        return self.context
+
+    def close(self):
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _FakePlaywright:
+    """Stand-in for sync_playwright(): `with ... as p:` yields a fake
+    whose chromium.launch() returns the scripted browser."""
+
+    def __init__(self, browser, enter_error=None):
+        self.browser = browser
+        self.enter_error = enter_error
+
+    def __enter__(self):
+        if self.enter_error is not None:
+            raise self.enter_error
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    @property
+    def chromium(self):
+        return self
+
+    def launch(self, headless=True):
+        if self.browser.launch_error is not None:
+            raise self.browser.launch_error
+        return self.browser
+
+
+class FacebookGroupsAdapterTests(SimpleTestCase):
+    """Story 1.7 matrix rows — hermetic against fake page objects.
+
+    Every row patches `sync_playwright` at the adapter module level
+    (`collector.adapters.facebook_groups.sync_playwright`); no live
+    network, no real Playwright API, no browser. The fixture
+    `tests/fixtures/facebook_feed.html` (documented 2026-08-19) is the
+    selector ground truth: card fakes are built by parsing it through the
+    adapter's pinned selectors (parsel), so selector/fixture drift fails
+    loudly.
+    """
+
+    FIXTURE = FACEBOOK_FIXTURE
+
+    def setUp(self):
+        self.adapter = FacebookGroupsAdapter(config={'groups': [GROUP_1]})
+
+    def _patch_playwright(self, browser):
+        fake_pw = _FakePlaywright(browser)
+        patcher = patch(
+            'collector.adapters.facebook_groups.sync_playwright',
+            return_value=fake_pw,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return fake_pw
+
+    def _fixture_cards(self):
+        return _fixture_fake_cards()
+
+    def _card(self, index, author='Author X', text=None, href=None,
+              with_link=True):
+        if with_link and href is None:
+            href = f'/groups/g/posts/{index}'
+        children = {
+            POST_TEXT_SELECTOR: _FakeElement(
+                text=text if text is not None else f'Post text {index}'
+            ),
+            AUTHOR_SELECTOR: _FakeElement(text=author),
+        }
+        if href:
+            children[PERMALINK_SELECTOR] = _FakeElement(attrs={'href': href})
+        return _FakeElement(children=children)
+
+    def test_ok_fetch_three_raw_items_and_parse_keyword_filtered(self):
+        page = _FakePage(cards=self._fixture_cards())
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        raw = self.adapter.fetch(['développeur'])
+
+        self.assertEqual(len(raw), 3)
+        # browser lifecycle: page/context/browser all close on the happy path
+        self.assertTrue(page.closed)
+        self.assertTrue(browser.context.closed)
+        self.assertTrue(browser.closed)
+        # decoys excluded: the nested comment article (no permalink) and
+        # the sidebar article (outside the feed container) never surface
+        permalinks = [item['permalink'] for item in raw]
+        self.assertNotIn(f'{BASE_URL}/groups/9999999999999999/posts/1', permalinks)
+        # URL variants emitted as-is: trailing slash and ?comment_id= kept
+        self.assertEqual(
+            permalinks,
+            [
+                f'{BASE_URL}/groups/1248610773920835/posts/101/',
+                f'{BASE_URL}/groups/1248610773920835/posts/102?comment_id=987654321',
+                f'{BASE_URL}/groups/1248610773920835/posts/103',
+            ],
+        )
+        # the nested comment's body never pollutes the parent post text
+        self.assertEqual(
+            raw[0]['text'],
+            'Urgent recrutement développeur web à Alger, CDI temps plein.',
+        )
+        # multi-paragraph post: every dir="auto" block, joined with '\n'
+        self.assertEqual(
+            raw[1]['text'],
+            'Vente voiture Peugeot 208 essence, très bon état.\n'
+            'Prix négociable, visite possible à Alger.',
+        )
+
+        parsed = self.adapter.parse(raw)
+
+        self.assertEqual(len(parsed), 1)  # only the fixture card matching the keyword
+        first = parsed[0]
+        self.assertEqual(
+            set(first),
+            {'title', 'company', 'url', 'published_at', 'keywords', 'raw_snapshot'},
+        )
+        self.assertEqual(
+            first['title'], 'Urgent recrutement développeur web à Alger, CDI temps plein.'
+        )
+        self.assertEqual(first['company'], 'Karim Benali')
+        self.assertEqual(
+            first['url'],
+            f'{BASE_URL}/groups/1248610773920835/posts/101/',
+        )
+        self.assertIsNone(first['published_at'])
+        self.assertEqual(first['keywords'], ['développeur'])
+        self.assertEqual(
+            first['raw_snapshot'],
+            {
+                'text': 'Urgent recrutement développeur web à Alger, CDI temps plein.',
+                'author': 'Karim Benali',
+                'permalink': f'{BASE_URL}/groups/1248610773920835/posts/101/',
+            },
+        )
+
+    def test_keyword_filter_case_insensitive_any_match(self):
+        self.adapter.keywords = ['développeur', 'commercial']
+        self.adapter._fetched = True
+        raw = [
+            {
+                'text': 'Besoin d un DÉVELOPPEUR python confirmé',
+                'author': 'A',
+                'permalink': f'{BASE_URL}/groups/1/posts/1',
+            },
+            {
+                'text': 'Aucun mot clé ici',
+                'author': 'B',
+                'permalink': f'{BASE_URL}/groups/1/posts/2',
+            },
+            {
+                'text': 'Commercial et développeur h/f recherchés',
+                'author': 'C',
+                'permalink': f'{BASE_URL}/groups/1/posts/3',
+            },
+        ]
+
+        parsed = self.adapter.parse(raw)
+
+        self.assertEqual(len(parsed), 2)
+        # case-insensitive substring match; original keyword string emitted
+        self.assertEqual(parsed[0]['keywords'], ['développeur'])
+        # a post matching two keywords lists both, in keyword-set order
+        self.assertEqual(parsed[1]['keywords'], ['développeur', 'commercial'])
+
+    def test_multi_group_order_dedupe_and_browser_lifecycle(self):
+        gotos = []
+        page_a = _FakePage(cards=[self._card(1), self._card(2)], gotos=gotos)
+        page_b = _FakePage(cards=[self._card(2), self._card(3)], gotos=gotos)
+        adapter = FacebookGroupsAdapter(config={'groups': [GROUP_1, GROUP_2]})
+        browser = _FakeBrowser(context=_FakeContext(pages=[page_a, page_b]))
+        self._patch_playwright(browser)
+
+        raw = adapter.fetch(['python'])
+
+        # both groups visited, in config order
+        self.assertEqual(gotos, [GROUP_1, GROUP_2])
+        # 4 cards - 1 shared permalink (deduped across groups) = 3 raw
+        self.assertEqual(len(raw), 3)
+        permalinks = [item['permalink'] for item in raw]
+        self.assertEqual(len(set(permalinks)), 3)
+        self.assertTrue(page_a.closed)
+        self.assertTrue(page_b.closed)
+        self.assertTrue(browser.context.closed)
+        self.assertTrue(browser.closed)
+
+    def test_no_posts_valid_empty(self):
+        page = _FakePage(cards=[])
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        self.assertEqual(self.adapter.fetch(['python']), [])
+        self.assertTrue(browser.closed)
+
+    def test_login_wall_labelled_with_group_context(self):
+        page = _FakePage(cards=[], wall=True)
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('login required', message)
+        self.assertIn(GROUP_1, message)
+        # the wall check runs BEFORE the feed wait: the feed is never
+        # waited for on a wall
+        self.assertEqual(page.feed_waits, 0)
+        # the failed group still closes the browser cleanly
+        self.assertTrue(browser.closed)
+
+    def test_login_wall_redirect_url_labelled_with_group_context(self):
+        # compound check (blind #3/#4, F4): '/login' in page.url counts
+        # as a wall even when the marker is not present
+        page = _FakePage(cards=[], url='https://www.facebook.com/login/')
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('login required', message)
+        self.assertIn(GROUP_1, message)
+        self.assertEqual(page.feed_waits, 0)
+        self.assertTrue(browser.closed)
+
+    def test_wall_and_feed_co_present_labelled_login_required(self):
+        # a gated group whose page renders BOTH the wall marker and the
+        # feed must be labelled 'login required', never NAV_TIMEOUT
+        page = _FakePage(cards=self._fixture_cards(), wall=True)
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('login required', message)
+        self.assertNotIn('timeout', message.lower())
+        self.assertEqual(page.feed_waits, 0)
+
+    def test_wall_after_load_labelled_login_required_not_nav_timeout(self):
+        # the wall marker appears only AFTER the feed-wait timeout: the
+        # re-probe on the timeout path must report 'login required'
+        page = _FakePage(
+            cards=[],
+            wall_probes=[False, True],
+            wait_error=TimeoutError('Timeout 30000ms exceeded'),
+        )
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('login required', message)
+        self.assertNotIn('timeout', message.lower())
+        self.assertIn(GROUP_1, message)
+        self.assertTrue(browser.closed)
+
+    def test_slow_public_group_wall_reprobe_does_not_false_positive(self):
+        # a slow public group: no wall before, none after the feed-wait
+        # timeout -> labelled NAV_TIMEOUT, never 'login required'
+        page = _FakePage(
+            cards=[],
+            wall_probes=[False, False],
+            wait_error=TimeoutError('Timeout 30000ms exceeded'),
+        )
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn(GROUP_1, message)
+        self.assertIn('timeout', message.lower())
+        self.assertNotIn('login required', message)
+
+    def test_nav_timeout_labelled_with_group_context(self):
+        for label, wait_error, goto_error in (
+            ('wait_for_selector', TimeoutError('Timeout 30000ms exceeded'), None),
+            ('goto', None, TimeoutError('Navigation timeout')),
+        ):
+            with self.subTest(stage=label):
+                page = _FakePage(
+                    cards=[], wait_error=wait_error, goto_error=goto_error
+                )
+                browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+                self._patch_playwright(browser)
+                with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+                    self.adapter.fetch(['python'])
+                message = str(ctx.exception)
+                self.assertIn(GROUP_1, message)
+                self.assertIn('timeout', message.lower())
+
+    def test_browser_launch_failure_labelled(self):
+        browser = _FakeBrowser(
+            context=_FakeContext(), launch_error=RuntimeError('launch exploded')
+        )
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('browser failed', message)
+        self.assertIn('launch exploded', message)
+
+    def test_new_context_failure_labelled_browser(self):
+        browser = _FakeBrowser(context_error=RuntimeError('context exploded'))
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('browser failed', message)
+        self.assertIn('context exploded', message)
+        self.assertTrue(browser.closed)
+
+    def test_new_page_failure_labelled_with_group_context(self):
+        browser = _FakeBrowser(
+            context=_FakeContext(
+                pages=[], new_page_error=RuntimeError('page exploded')
+            )
+        )
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn(GROUP_1, message)
+        self.assertIn('page exploded', message)
+        self.assertTrue(browser.context.closed)
+        self.assertTrue(browser.closed)
+
+    def test_playwright_enter_failure_labelled(self):
+        fake_pw = _FakePlaywright(
+            _FakeBrowser(), enter_error=RuntimeError('playwright exploded')
+        )
+        patcher = patch(
+            'collector.adapters.facebook_groups.sync_playwright',
+            return_value=fake_pw,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('browser failed', message)
+        self.assertIn('playwright exploded', message)
+
+    def test_page_close_failure_never_masks_in_flight_error(self):
+        # F2: a teardown failure must never replace the labelled
+        # in-flight error (the login wall here)
+        page = _FakePage(
+            cards=[], wall=True, close_error=RuntimeError('close exploded')
+        )
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            self.adapter.fetch(['python'])
+        message = str(ctx.exception)
+        self.assertIn('login required', message)
+        self.assertNotIn('close exploded', message)
+        # the rest of the teardown still runs
+        self.assertTrue(browser.context.closed)
+        self.assertTrue(browser.closed)
+
+    def test_teardown_close_failures_on_happy_path_swallowed(self):
+        page = _FakePage(cards=[self._card(1)])
+        context = _FakeContext(
+            pages=[page], close_error=RuntimeError('context close exploded')
+        )
+        browser = _FakeBrowser(
+            context=context, close_error=RuntimeError('browser close exploded')
+        )
+        self._patch_playwright(browser)
+
+        raw = self.adapter.fetch(['python'])
+
+        self.assertEqual(len(raw), 1)
+        self.assertTrue(page.closed)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    def test_dedupe_collapses_slash_and_query_variants(self):
+        # F8: the dedupe identity is (netloc.lower(), path) — trailing
+        # slashes, ?comment_id= queries and host casing collapse onto
+        # the first occurrence; the permalink is emitted as-is
+        page = _FakePage(cards=[
+            self._card(1, href='/groups/g/posts/5'),
+            self._card(2, href='/groups/g/posts/5/'),
+            self._card(3, href='https://WWW.FACEBOOK.com/groups/g/posts/5?comment_id=123'),
+        ])
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        raw = self.adapter.fetch(['python'])
+
+        self.assertEqual(len(raw), 1)
+        self.assertEqual(raw[0]['permalink'], f'{BASE_URL}/groups/g/posts/5')
+
+    def test_parse_without_fetch_raises_labelled(self):
+        adapter = FacebookGroupsAdapter(config={'groups': [GROUP_1]})
+
+        with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+            adapter.parse([{
+                'text': 'Recrutement développeur web',
+                'author': 'A',
+                'permalink': f'{BASE_URL}/groups/g/posts/9',
+            }])
+        message = str(ctx.exception)
+        self.assertIn('parse', message)
+        self.assertIn('before fetch', message)
+
+    def test_card_without_permalink_skipped(self):
+        page = _FakePage(
+            cards=[
+                self._card(1),
+                self._card(2, with_link=False),  # no link element at all
+                self._card(3, href=''),  # link with empty href
+            ]
+        )
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        raw = self.adapter.fetch(['python'])
+
+        self.assertEqual(len(raw), 1)
+        self.assertEqual(raw[0]['permalink'], f'{BASE_URL}/groups/g/posts/1')
+
+    def test_missing_author_company_empty(self):
+        self.adapter.keywords = ['développeur']
+        self.adapter._fetched = True
+        raw = [{
+            'text': 'Recrutement développeur web',
+            'author': '',
+            'permalink': f'{BASE_URL}/groups/g/posts/9',
+        }]
+
+        parsed = self.adapter.parse(raw)
+
+        self.assertEqual(parsed[0]['company'], '')
+
+    def test_missing_author_element_fetch_yields_empty_author(self):
+        card = _FakeElement(children={
+            POST_TEXT_SELECTOR: _FakeElement(text='Recrutement développeur web'),
+            PERMALINK_SELECTOR: _FakeElement(
+                attrs={'href': '/groups/g/posts/9'}
+            ),
+        })
+        page = _FakePage(cards=[card])
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        self._patch_playwright(browser)
+
+        raw = self.adapter.fetch(['python'])
+
+        self.assertEqual(raw[0]['author'], '')
+
+    def test_long_text_title_truncated_to_500(self):
+        self.adapter.keywords = ['développeur']
+        self.adapter._fetched = True
+        line = 'Recrutement développeur ' + 'x' * 600
+        text = '\n\n' + line + '\nsecond line ignored'
+        raw = [{
+            'text': text,
+            'author': 'A',
+            'permalink': f'{BASE_URL}/groups/g/posts/9',
+        }]
+
+        parsed = self.adapter.parse(raw)
+
+        self.assertEqual(len(parsed[0]['title']), 500)
+        self.assertEqual(parsed[0]['title'], line[:500])
+        self.assertNotIn('second line', parsed[0]['title'])
+        # raw_snapshot keeps the FULL text (the cap lives in the pipeline)
+        self.assertEqual(parsed[0]['raw_snapshot']['text'], text)
+
+    def test_cap_boundary_51_unique_across_groups_both_visited(self):
+        gotos = []
+        # 50 unique permalinks in group 1; group 2 re-posts the same 50
+        # plus one new -> 51 unique, capped at 50 first-occurrence.
+        page_a = _FakePage(cards=[self._card(i) for i in range(50)], gotos=gotos)
+        page_b = _FakePage(
+            cards=[self._card(i) for i in range(50)] + [self._card(50)],
+            gotos=gotos,
+        )
+        adapter = FacebookGroupsAdapter(config={'groups': [GROUP_1, GROUP_2]})
+        browser = _FakeBrowser(context=_FakeContext(pages=[page_a, page_b]))
+        self._patch_playwright(browser)
+
+        raw = adapter.fetch(['python'])
+
+        self.assertEqual(len(raw), 50)
+        # the cap never short-circuits the group loop: both visited
+        self.assertEqual(gotos, [GROUP_1, GROUP_2])
+        self.assertTrue(page_b.closed)
+        self.assertTrue(browser.context.closed)
+        self.assertTrue(browser.closed)
+
+    def test_config_bad_groups_labelled_before_browser_launch(self):
+        for bad_config in (
+            None,
+            {},
+            {'groups': []},
+            {'groups': 'https://www.facebook.com/groups/123'},
+            {'groups': ['https://www.facebook.com/groups/123', 42]},
+        ):
+            with self.subTest(config=bad_config):
+                adapter = FacebookGroupsAdapter(config=bad_config)
+                with patch(
+                    'collector.adapters.facebook_groups.sync_playwright'
+                ) as pw:
+                    with self.assertRaises(FacebookGroupsAdapterError) as ctx:
+                        adapter.fetch(['python'])
+                self.assertIn("'groups'", str(ctx.exception))
+                # config is validated before any browser work
+                pw.assert_not_called()
+
+    def test_fixture_documents_selector_ground_truth(self):
+        self.assertIn('2026-08-19', self.FIXTURE)
+        doc = parsel.Selector(text=self.FIXTURE)
+        self.assertEqual(len(doc.css(FEED_CONTAINER_SELECTOR)), 1)
+        # Decoys: a nested comment article inside card 1 and a
+        # sidebar/suggested-group article OUTSIDE the feed container —
+        # both match the BARE card selector (5 articles total).
+        self.assertEqual(len(doc.css(POST_CARD_SELECTOR)), 5)
+        # Scoping (feed container + card, F6) excludes the sidebar; the
+        # nested comment still matches the scoped selector but carries no
+        # permalink, so extraction yields exactly the 3 real cards.
+        scoped = FACEBOOK_CARD_SELECTOR
+        scoped_cards = doc.css(scoped)
+        self.assertEqual(len(scoped_cards), 4)
+        real = [card for card in scoped_cards if card.css(PERMALINK_SELECTOR)]
+        self.assertEqual(len(real), 3)
+        for card in real:
+            self.assertTrue(card.css(POST_TEXT_SELECTOR))
+            self.assertTrue(card.css(AUTHOR_SELECTOR))
+        # URL variants pinned as-is: trailing slash + ?comment_id= query
+        hrefs = [card.css(PERMALINK_SELECTOR)[0].attrib['href'] for card in real]
+        self.assertEqual(hrefs, [
+            '/groups/1248610773920835/posts/101/',
+            '/groups/1248610773920835/posts/102?comment_id=987654321',
+            '/groups/1248610773920835/posts/103',
+        ])
+        # dedupe identity (F8): the (netloc, path) keys stay distinct for
+        # distinct posts — the variants collapse onto these keys, never
+        # off them
+        keys = []
+        for href in hrefs:
+            parts = urlsplit(urljoin(BASE_URL, href))
+            keys.append((parts.netloc.lower(), parts.path.rstrip('/')))
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(
+            keys,
+            [
+                ('www.facebook.com', '/groups/1248610773920835/posts/101'),
+                ('www.facebook.com', '/groups/1248610773920835/posts/102'),
+                ('www.facebook.com', '/groups/1248610773920835/posts/103'),
+            ],
+        )
+        # multi-paragraph card (2): two dir="auto" blocks, joined with
+        # '\n' (F7 — the fake inner_text joins block text nodes with
+        # '\n', the adapter joins the blocks the same way)
+        blocks = real[1].css(POST_TEXT_SELECTOR)
+        self.assertEqual(len(blocks), 2)
+        joined = '\n'.join(
+            '\n'.join(block.css('::text').getall()) for block in blocks
+        )
+        self.assertEqual(
+            joined,
+            'Vente voiture Peugeot 208 essence, très bon état.\n'
+            'Prix négociable, visite possible à Alger.',
+        )
+        # card 1 carries the nested comment decoy: single dir="auto"
+        # block (the comment's body is a plain div, never polluting the
+        # parent post text)
+        self.assertEqual(len(real[0].css(POST_TEXT_SELECTOR)), 1)
+        # the nested comment decoy has NO permalink (skipped by the
+        # no-permalink rule) and NO dir="auto" body; the sidebar decoy
+        # HAS a permalink (excluded by scoping only)
+        comment = [
+            card for card in scoped_cards if not card.css(PERMALINK_SELECTOR)
+        ]
+        self.assertEqual(len(comment), 1)
+        self.assertFalse(comment[0].css(PERMALINK_SELECTOR))
+        self.assertFalse(comment[0].css(POST_TEXT_SELECTOR))
+
+
+class FacebookProductionRegistrationTests(SimpleTestCase):
+    """The facebook-groups registry row comes from import time (no test
+    scaffolding; setUp intentionally does not call clear())."""
+
+    def test_facebook_groups_production_registration_resolves(self):
+        self.assertIs(get_adapter('facebook-groups'), FacebookGroupsAdapter)
+
+
+class FacebookFullStackTests(TestCase):
+    """Story 1.7 acceptance: registered adapter through collect_source.
+
+    Relies on the import-time registration in collector/__init__.py; the
+    REAL adapter fetch runs against the module-level fake playwright (no
+    network, no browser, no Playwright API) driven by the fixture cards.
+    """
+
+    def test_collect_source_logs_ok_and_stores_listings(self):
+        source = Source.objects.create(
+            name='facebook-groups',
+            adapter_key='facebook-groups',
+            config={
+                'groups': [GROUP_1],
+                'keywords': ['développeur'],
+            },
+        )
+        page = _FakePage(cards=_fixture_fake_cards())
+        browser = _FakeBrowser(context=_FakeContext(pages=[page]))
+        with patch(
+            'collector.adapters.facebook_groups.sync_playwright',
+            return_value=_FakePlaywright(browser),
+        ):
+            created = collect_source(source)
+
+        # only the keyword-matching post lands in the listing store
+        self.assertEqual(created, 1)
+        self.assertEqual(Listing.objects.count(), 1)
+        ok_log = FetchLog.objects.get(source=source, ok=True)
+        self.assertEqual(ok_log.stage, 'persist')
+        self.assertEqual(ok_log.error, '')
+        listing = Listing.objects.get()
+        self.assertEqual(
+            listing.title,
+            'Urgent recrutement développeur web à Alger, CDI temps plein.',
+        )
+        self.assertEqual(listing.company, 'Karim Benali')
+        self.assertEqual(
+            listing.url, f'{BASE_URL}/groups/1248610773920835/posts/101/'
+        )
+        self.assertIsNone(listing.published_at)
+        self.assertEqual(listing.keywords, ['développeur'])
+        # extract keeps the raw item verbatim: the canonical dict from
+        # parse survives nested inside the stored snapshot chain
+        self.assertEqual(
+            listing.raw_snapshot,
+            {
+                'title': 'Urgent recrutement développeur web à Alger, CDI temps plein.',
+                'company': 'Karim Benali',
+                'url': f'{BASE_URL}/groups/1248610773920835/posts/101/',
+                'published_at': None,
+                'keywords': ['développeur'],
+                'raw_snapshot': {
+                    'text': 'Urgent recrutement développeur web à Alger, CDI temps plein.',
+                    'author': 'Karim Benali',
+                    'permalink': f'{BASE_URL}/groups/1248610773920835/posts/101/',
+                },
+            },
+        )
+        self.assertEqual(listing.source, source)
+        self.assertEqual(listing.seen_sources, ['facebook-groups'])
+        self.assertEqual(listing.status, 'new')
+        # the real fetch drove the flow end-to-end: browser fully torn down
+        self.assertTrue(page.closed)
+        self.assertTrue(browser.context.closed)
+        self.assertTrue(browser.closed)
